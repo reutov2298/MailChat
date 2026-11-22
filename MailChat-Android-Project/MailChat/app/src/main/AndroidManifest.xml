@@ -13,7 +13,7 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:scheme="${'$'}{applicationId}"
+                    android:scheme="${applicationId}"
                     android:host="oauth2redirect" />
             </intent-filter>
         </activity>
