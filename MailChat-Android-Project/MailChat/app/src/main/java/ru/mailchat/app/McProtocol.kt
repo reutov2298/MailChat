@@ -29,7 +29,7 @@ object McProtocol {
         return verifyDetailed(mail, ownEmail).parsed
     }
 
-    private fun parseBlock(block: String): Map<String, String> {
+    private fun parseBlock(block: String): MutableMap<String, String> {
         val values = linkedMapOf<String, StringBuilder>()
         var currentKey: String? = null
         val headerPattern = Regex("^([A-Za-z0-9-]+):\\s*(.*)$")
@@ -63,43 +63,9 @@ object McProtocol {
             }
         }
 
-        return values.mapValues { it.value.toString().trim() }
+        return values.mapValuesTo(linkedMapOf()) { it.value.toString().trim() }
     }
 
-
-    private fun parseBlock(block: String): MutableMap<String, String> {
-        val result = linkedMapOf<String, String>()
-        var currentKey: String? = null
-
-        val header = Regex("^([A-Za-z0-9-]+):\\s*(.*)$")
-        val base64 = Regex("^[A-Za-z0-9+/=_-]+$")
-
-        for (raw in block.replace("\r\n", "\n").replace('\r', '\n').lines()) {
-            if (raw.isBlank()) continue
-
-            val line = raw.trimEnd()
-            val match = header.matchEntire(line)
-
-            if (match != null) {
-                currentKey = match.groupValues[1].lowercase()
-                result[currentKey] = match.groupValues[2].trim()
-                continue
-            }
-
-            val key = currentKey ?: continue
-            val value = line.trim()
-
-            if (line.firstOrNull()?.isWhitespace() == true ||
-                (key == "x-mc-signature" && base64.matches(value))
-            ) {
-                result[key] = result[key].orEmpty() + value
-            } else {
-                currentKey = null
-            }
-        }
-
-        return result
-    }
 
     fun verifyDetailed(
         mail: GmailTransport.RemoteMessage,
