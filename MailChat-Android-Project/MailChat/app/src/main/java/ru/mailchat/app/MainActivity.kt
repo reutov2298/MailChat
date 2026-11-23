@@ -173,6 +173,10 @@ class MainActivity : ComponentActivity() {
                     }
 
                     logger.debug("Обработка письма Gmail ID: ${mail.id}")
+
+                    val mcBlock = mail.body.substringAfter("-----BEGIN MC DATA-----", "").substringBefore("-----END MC DATA-----")
+                    logger.debug("MC DATA extracted: markers=${mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")}, signature=${mcBlock.contains("X-MC-Signature:", ignoreCase = true)}")
+
                     val verification = McProtocol.verifyDetailed(
                         mail, accountEmail.ifBlank { repo.myEmail() }
                     )
