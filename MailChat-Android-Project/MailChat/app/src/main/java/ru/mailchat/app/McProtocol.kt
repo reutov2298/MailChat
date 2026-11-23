@@ -1,13 +1,10 @@
 package ru.mailchat.app
 
 import java.security.KeyFactory
-import java.security.Security
-import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 
 object McProtocol {
-    init { if (Security.getProvider("BC") == null) Security.addProvider(BouncyCastleProvider()) }
     data class Parsed(val messageId: String, val chatId: String, val sender: String, val recipient: String, val text: String, val timestamp: Long)
     private val required = listOf("x-mc-protocol", "x-mc-message-id", "x-mc-chat-id", "x-mc-sender-id", "x-mc-sender", "x-mc-recipient", "x-mc-version", "x-mc-message-type", "x-mc-timestamp", "x-mc-sequence", "x-mc-key-id", "x-mc-public-key", "x-mc-signature-algorithm", "x-mc-signature")
 
@@ -29,7 +26,7 @@ object McProtocol {
         val recipient = duplicated.getValue("x-mc-recipient")
         if (!recipient.equals(ownEmail, true)) return null
         val publicKeyEncoded = Base64.getDecoder().decode(duplicated.getValue("x-mc-public-key"))
-        val publicKey = KeyFactory.getInstance("Ed25519", "BC").generatePublic(X509EncodedKeySpec(publicKeyEncoded))
+        val publicKey = KeyFactory.getInstance("Ed25519", McCrypto.provider).generatePublic(X509EncodedKeySpec(publicKeyEncoded))
         val text = mail.body.substring(end + "-----END MC DATA-----".length).trimStart('\r', '\n').trimEnd('\r', '\n')
         val messageId = duplicated.getValue("x-mc-message-id")
         val chatId = duplicated.getValue("x-mc-chat-id")
