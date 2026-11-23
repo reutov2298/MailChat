@@ -44,7 +44,16 @@ object McProtocol {
                 start + "-----BEGIN MC DATA-----".length, end
             )
 
-            val duplicated = block.lineSequence().mapNotNull { line ->
+            val unfolded = mutableListOf<String>()
+            for (line in block.lineSequence()) {
+                if ((line.startsWith(" ") || line.startsWith("\t")) && unfolded.isNotEmpty()) {
+                    unfolded[unfolded.lastIndex] += " " + line.trim()
+                } else {
+                    unfolded += line
+                }
+            }
+
+            val duplicated = unfolded.mapNotNull { line ->
                 val idx = line.indexOf(':')
                 if (idx <= 0) null
                 else line.substring(0, idx).trim().lowercase() to
