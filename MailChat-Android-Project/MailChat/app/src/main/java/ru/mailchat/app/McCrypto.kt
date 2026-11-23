@@ -6,10 +6,10 @@ import java.security.KeyPairGenerator
 import java.security.Signature
 import java.util.Base64
 
-internal val provider = BouncyCastleProvider()
 
 /** Ed25519 identity key. Private key bytes must remain local; only public key is sent. */
 object McCrypto {
+    internal val provider = BouncyCastleProvider()
     fun generate(): KeyPair = KeyPairGenerator.getInstance("Ed25519", provider).generateKeyPair()
     fun publicKey(pair: KeyPair): String = Base64.getEncoder().encodeToString(pair.public.encoded)
     fun sign(pair: KeyPair, canonicalPayload: ByteArray): String {
