@@ -176,6 +176,13 @@ class MainActivity : ComponentActivity() {
 
                     val mcBlock = mail.body.substringAfter("-----BEGIN MC DATA-----", "").substringBefore("-----END MC DATA-----")
                     logger.debug("MC DATA extracted: markers=${mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")}, signature=${mcBlock.contains("X-MC-Signature:", ignoreCase = true)}")
+                    val signatureLines = mcBlock.lineSequence()
+                        .filter { it.contains("signature", ignoreCase = true) }
+                        .toList()
+                    logger.debug("MC signature diagnostics: " + signatureLines.map { line ->
+                        "length=${line.length}, colon=${line.indexOf(':')}, chars=" +
+                            line.takeWhile { it != ':' }.map { it.code.toString(16) }.joinToString(",")
+                    }.joinToString("; "))
 
                     val verification = McProtocol.verifyDetailed(
                         mail, accountEmail.ifBlank { repo.myEmail() }
