@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
     private var accountEmail: String = ""
     private var errorText by mutableStateOf("")
     private var authChanged by mutableIntStateOf(0)
+    private var chats by mutableStateOf<List<McChat>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -147,7 +148,6 @@ class MainActivity : ComponentActivity() {
         var settings by remember { mutableStateOf(false) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
-        var chats by remember { mutableStateOf(repo.chats()) }
         var status by remember { mutableStateOf("") }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
