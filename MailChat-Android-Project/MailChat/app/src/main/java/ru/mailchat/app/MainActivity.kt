@@ -1,11 +1,14 @@
 package ru.mailchat.app
 
+import android.content.ClipData
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -30,6 +34,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.Security
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
@@ -166,11 +173,14 @@ class MainActivity : ComponentActivity() {
                     }
 
                     logger.debug("Обработка письма Gmail ID: ${mail.id}")
-                    val parsed = McProtocol.verify(mail, accountEmail.ifBlank { repo.myEmail() })
+                    val verification = McProtocol.verifyDetailed(
+                        mail, accountEmail.ifBlank { repo.myEmail() }
+                    )
+                    val parsed = verification.parsed
 
                     if (parsed == null) {
                         if (mail.subject == "[MC] Message") {
-                            logger.warn("Отклонено неподтверждённое или повреждённое сообщение MC")
+                            logger.warn("Сообщение MC отклонено. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
                         }
                         continue
                     }
@@ -237,6 +247,9 @@ class MainActivity : ComponentActivity() {
         var status by remember { mutableStateOf("") }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
+        val clipboardManager = remember {
+            getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        }
         val refresh = authChanged
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(topBar = {
@@ -257,7 +270,10 @@ class MainActivity : ComponentActivity() {
                 when {
                     logs -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         Text("Размер файла: ${logSize} байт", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Button(
                                 onClick = {
                                     syncNow {
@@ -270,13 +286,27 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 Text(if (syncInProgress) "Проверяем..." else "Проверить почту")
                             }
+                            IconButton(onClick = {
+                                clipboardManager.setPrimaryClip(
+                                    ClipData.newPlainText("MC log", logText)
+                                )
+                            }) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = "Копировать лог")
+                            }
+                            Spacer(Modifier.weight(1f))
                             TextButton(onClick = {
                                 logger.clear()
                                 logText = logger.read()
                                 logSize = logger.sizeBytes()
                             }) { Text("Очистить лог") }
                         }
-                        Text(logText, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f).fillMaxWidth())
+                        Text(
+                            logText,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                            modifier = Modifier.weight(1f).fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                        )
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
@@ -367,7 +397,12 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.widthIn(max = 300.dp).padding(10.dp)) {
                                 if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
                                 Text(message.text)
-                                Text("${message.timestamp}", fontSize = 10.sp, color = Color.LightGray)
+                                Text(
+                                    SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
+                                        .format(Date(message.timestamp * 1000L)),
+                                    fontSize = 10.sp,
+                                    color = Color.LightGray
+                                )
                             }
                         }
                     }

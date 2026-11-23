@@ -71,7 +71,7 @@ class GmailTransport {
 
     fun list(token: String, query: String, max: Int = 50): List<RemoteMessage> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&q=$q", token))
+        val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&includeSpamTrash=true&q=$q", token))
         val ids = root.optJSONArray("messages") ?: return emptyList()
         val result = mutableListOf<RemoteMessage>()
         for (i in 0 until ids.length()) {
@@ -101,18 +101,32 @@ class GmailTransport {
 
     private fun extractBody(payload: JSONObject?): String {
         if (payload == null) return ""
-        val data = payload.optJSONObject("body")?.optString("data").orEmpty()
-        if (data.isNotBlank()) return decode(data)
-        val parts = payload.optJSONArray("parts") ?: return ""
-        for (i in 0 until parts.length()) {
-            val part = parts.optJSONObject(i) ?: continue
-            if (part.optString("mimeType").startsWith("text/plain")) {
+
+        val plainParts = mutableListOf<String>()
+
+        fun collect(part: JSONObject) {
+            if (part.optString("mimeType").equals("text/plain", true)) {
                 val encoded = part.optJSONObject("body")?.optString("data").orEmpty()
-                if (encoded.isNotBlank()) return decode(encoded)
+                if (encoded.isNotBlank()) {
+                    val decoded = decode(encoded)
+                    if (decoded.isNotBlank()) plainParts.add(decoded)
+                }
+            }
+
+            val parts = part.optJSONArray("parts") ?: return
+            for (i in 0 until parts.length()) {
+                val child = parts.optJSONObject(i) ?: continue
+                collect(child)
             }
         }
-        return ""
+
+        collect(payload)
+
+        return plainParts.firstOrNull {
+            it.contains("-----BEGIN MC DATA-----")
+        } ?: plainParts.firstOrNull().orEmpty()
     }
+
     private fun decode(data: String): String = try {
         String(Base64.decode(data, Base64.URL_SAFE or Base64.NO_WRAP), StandardCharsets.UTF_8)
     } catch (_: Exception) { "" }
