@@ -13,7 +13,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="ru.mailchat.app" android:host="oauth2redirect" />
+                <data android:scheme="${appAuthRedirectScheme}" />
             </intent-filter>
         </activity>
         <activity android:name=".MainActivity" android:exported="true" launchMode="singleTop">
