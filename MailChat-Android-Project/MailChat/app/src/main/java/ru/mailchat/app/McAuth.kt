@@ -37,18 +37,25 @@ class McAuth(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
         service.performAuthorizationRequest(request, pending)
     }
-    fun handle(intent: Intent, callback: (String?, String?) -> Unit) {
+    fun handle(intent: Intent, callback: (String?, String?) -> Unit): Boolean {
         val response = AuthorizationResponse.fromIntent(intent)
         val error = AuthorizationException.fromIntent(intent)
-        if (response == null) { if (error != null) callback(null, error.errorDescription ?: "Ошибка OAuth"); return }
+        if (response == null) {
+            if (error != null) callback(null, error.errorDescription ?: "Ошибка OAuth")
+            return error != null
+        }
         service.performTokenRequest(response.createTokenExchangeRequest()) { tokenResponse, tokenError ->
             if (tokenResponse != null) {
                 val state = AuthState(response, tokenResponse, tokenError)
                 prefs.edit().putString("auth_state", state.jsonSerializeString()).apply()
                 callback(tokenResponse.accessToken, null)
-            } else callback(null, tokenError?.errorDescription ?: "Не удалось получить токен")
+            } else {
+                callback(null, tokenError?.errorDescription ?: "Не удалось получить токен")
+            }
         }
+        return true
     }
+
     fun accessToken(callback: (String?, String?) -> Unit) {
         val json = prefs.getString("auth_state", null)
         if (json == null) { callback(null, "Аккаунт Google не подключён"); return }

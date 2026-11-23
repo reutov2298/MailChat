@@ -51,18 +51,28 @@ class MainActivity : ComponentActivity() {
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
         logger.add("Приложение запущено")
-        if (auth.isConnected()) refreshToken()
+        if (!handleAuthIntent(intent) && auth.isConnected()) refreshToken()
         setContent { McApp() }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        auth.handle(intent) { access, error ->
+        handleAuthIntent(intent)
+    }
+
+    private fun handleAuthIntent(intent: Intent): Boolean {
+        return auth.handle(intent) { access, error ->
             if (access != null) {
-                token = access; logger.add("Авторизация Google выполнена"); authChanged++
+                token = access
+                logger.add("Авторизация Google выполнена")
+                authChanged++
                 loadProfileAndSetBaseline()
-            } else { errorText = error ?: "Ошибка авторизации"; logger.add("Ошибка OAuth: $errorText"); authChanged++ }
+            } else if (error != null) {
+                errorText = error
+                logger.add("Ошибка OAuth: $errorText")
+                authChanged++
+            }
         }
     }
 
