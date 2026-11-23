@@ -11,7 +11,8 @@ object McProtocol {
     data class Parsed(val messageId: String, val chatId: String, val sender: String, val recipient: String, val text: String, val timestamp: Long)
     private val required = listOf("x-mc-protocol", "x-mc-message-id", "x-mc-chat-id", "x-mc-sender-id", "x-mc-sender", "x-mc-recipient", "x-mc-version", "x-mc-message-type", "x-mc-timestamp", "x-mc-sequence", "x-mc-key-id", "x-mc-public-key", "x-mc-signature-algorithm", "x-mc-signature")
 
-    fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? = try {
+    fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? {
+        return try {
         if (mail.subject != "[MC] Message") return null
         val start = mail.body.indexOf("-----BEGIN MC DATA-----")
         val end = mail.body.indexOf("-----END MC DATA-----")
@@ -39,5 +40,6 @@ object McProtocol {
             duplicated.getValue("x-mc-sequence"), duplicated.getValue("x-mc-key-id"), duplicated.getValue("x-mc-public-key"), text).joinToString("\n")
         if (!McCrypto.verify(publicKey, canonical.toByteArray(Charsets.UTF_8), duplicated.getValue("x-mc-signature"))) return null
         Parsed(messageId, chatId, sender, recipient, text, timestamp)
-    } catch (_: Exception) { null }
+        } catch (_: Exception) { null }
+    }
 }
