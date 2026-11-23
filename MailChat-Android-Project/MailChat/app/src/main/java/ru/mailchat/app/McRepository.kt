@@ -33,5 +33,14 @@ class McRepository(context: Context) {
         }
         prefs.edit().putString("chats", root.toString()).apply()
     }
-    fun deleteChat(email: String) { save(chats().filterNot { it.email.equals(email, true) }) }
+    fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
+
+    fun setLastChat(email: String?) {
+        prefs.edit().putString("last_chat", email.orEmpty()).apply()
+    }
+
+    fun deleteChat(email: String) {
+        save(chats().filterNot { it.email.equals(email, true) })
+        if (lastChat().equals(email, true)) setLastChat(null)
+    }
 }

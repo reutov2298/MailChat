@@ -45,12 +45,14 @@ class MainActivity : ComponentActivity() {
     private var errorText by mutableStateOf("")
     private var authChanged by mutableIntStateOf(0)
     private var chats by mutableStateOf<List<McChat>>(emptyList())
+    private var syncInProgress by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
-        logger.add("Приложение запущено")
+        chats = repo.chats()
+        logger.add("Приложение запущено. Восстановлено чатов: ${chats.size}")
         if (!handleAuthIntent(intent) && auth.isConnected()) refreshToken()
         setContent { McApp() }
     }
@@ -78,8 +80,18 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshToken() {
         auth.accessToken { access, error ->
-            if (access != null) { token = access; logger.add("Токен Google обновлён"); authChanged++ }
-            else { errorText = error.orEmpty(); logger.add("Не удалось восстановить авторизацию: $errorText"); authChanged++ }
+            if (access != null) {
+                token = access
+                logger.add("Токен Google обновлён")
+                authChanged++
+                loadProfileAndSetBaseline()
+            } else {
+                token = null
+                accountEmail = ""
+                errorText = error.orEmpty()
+                logger.add("Не удалось восстановить авторизацию: ${errorText.take(200)}")
+                authChanged++
+            }
         }
     }
 
@@ -87,6 +99,7 @@ class MainActivity : ComponentActivity() {
         val t = token ?: return
         lifecycleScope.launch {
             try {
+                logger.add("Запрос профиля Gmail")
                 val profile = withContext(Dispatchers.IO) { gmail.profile(t) }
                 accountEmail = profile.email
                 repo.setEmail(profile.email)
@@ -96,7 +109,13 @@ class MainActivity : ComponentActivity() {
                 }
                 logger.add("Gmail подключён: ${profile.email}")
                 authChanged++
-            } catch (e: Exception) { errorText = e.message ?: "Ошибка Gmail API"; logger.add("Ошибка подключения Gmail: $errorText"); authChanged++ }
+            } catch (e: Exception) {
+                errorText = e.message ?: "Ошибка Gmail API"
+                logger.add("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
+                token = null
+                accountEmail = ""
+                authChanged++
+            }
         }
     }
 
@@ -104,57 +123,114 @@ class MainActivity : ComponentActivity() {
         val t = token ?: run { done("Сначала подключите Gmail"); return }
         lifecycleScope.launch {
             try {
+                logger.add("Начата отправка сообщения получателю: $to")
                 val id = withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
                     gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey()) { bytes -> McCrypto.sign(pair, bytes) }
                 }
                 logger.add("Сообщение отправлено в Gmail: $id")
                 done(null)
-            } catch (e: Exception) { logger.add("Ошибка отправки: ${e.message}"); done(e.message ?: "Ошибка отправки") }
+            } catch (e: Exception) {
+                logger.add("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
+                done(e.message ?: "Ошибка отправки")
+            }
         }
     }
 
     private fun syncNow(done: (String) -> Unit = {}) {
+        if (syncInProgress) {
+            done("Проверка уже выполняется")
+            return
+        }
         val t = token ?: run { done("Нет подключения Gmail"); return }
         val since = repo.baseline().coerceAtLeast(1L)
+        syncInProgress = true
+        logger.add("Начата проверка почты. Точка синхронизации: $since")
+
         lifecycleScope.launch {
+            var result = "Проверка завершена"
             try {
-                val incoming = withContext(Dispatchers.IO) { gmail.list(t, "after:$since {in:inbox in:spam}", 50) }
+                logger.add("Запрос списка входящих сообщений Gmail")
+                val incoming = withContext(Dispatchers.IO) {
+                    gmail.list(t, "after:$since {in:inbox in:spam}", 50)
+                }
+                logger.add("Gmail вернул сообщений: ${incoming.size}")
+
                 var accepted = 0
+                var skipped = 0
+
                 for (mail in incoming) {
-                    if (repo.isProcessed(mail.id)) continue
-                    val parsed = McProtocol.verify(mail, accountEmail.ifBlank { repo.myEmail() })
-                    if (parsed == null) {
-                        if (mail.subject == "[MC] Message") logger.add("Отклонено неподтверждённое или повреждённое сообщение MC")
+                    if (repo.isProcessed(mail.id)) {
+                        skipped++
                         continue
                     }
+
+                    logger.debug("Обработка письма Gmail ID: ${mail.id}")
+                    val parsed = McProtocol.verify(mail, accountEmail.ifBlank { repo.myEmail() })
+
+                    if (parsed == null) {
+                        if (mail.subject == "[MC] Message") {
+                            logger.warn("Отклонено неподтверждённое или повреждённое сообщение MC")
+                        }
+                        continue
+                    }
+
                     if (mail.spam) {
                         withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
-                        logger.add("Подтверждённое сообщение MC автоматически возвращено из спама")
+                        logger.info("Подтверждённое сообщение MC возвращено из спама")
                     }
+
                     val current = repo.chats().toMutableList()
                     if (current.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
                         repo.markProcessed(mail.id)
+                        skipped++
                         continue
                     }
+
                     val index = current.indexOfFirst { it.email.equals(parsed.sender, true) }
-                    val recovered = mail.spam
-                    val message = McMessage(id = parsed.messageId, chatId = parsed.chatId, sender = parsed.sender, recipient = parsed.recipient, text = parsed.text, timestamp = parsed.timestamp, incoming = true, state = DeliveryState.DELIVERED, recoveredFromSpam = recovered)
-                    if (index >= 0) current[index] = current[index].copy(messages = current[index].messages + message)
-                    else current.add(McChat(parsed.sender, messages = listOf(message)))
-                    repo.save(current); repo.markProcessed(mail.id); accepted++
-                    logger.add(if (recovered) "Новое сообщение добавлено в чат (из спама)" else "Новое сообщение MC получено")
+                    val message = McMessage(
+                        id = parsed.messageId,
+                        chatId = parsed.chatId,
+                        sender = parsed.sender,
+                        recipient = parsed.recipient,
+                        text = parsed.text,
+                        timestamp = parsed.timestamp,
+                        incoming = true,
+                        state = DeliveryState.DELIVERED,
+                        recoveredFromSpam = mail.spam
+                    )
+
+                    if (index >= 0) {
+                        current[index] = current[index].copy(messages = current[index].messages + message)
+                    } else {
+                        current.add(McChat(parsed.sender, messages = listOf(message)))
+                    }
+
+                    repo.save(current)
+                    repo.markProcessed(mail.id)
+                    accepted++
+                    logger.info("Новое сообщение MC сохранено в локальном чате")
                 }
+
                 chats = repo.chats()
-                logger.add("Проверка Gmail завершена. Принято сообщений: $accepted")
-                done("Проверка завершена. Новых сообщений: $accepted")
-            } catch (e: Exception) { logger.add("Ошибка синхронизации: ${e.message}"); done(e.message ?: "Ошибка синхронизации") }
+                logger.add("Проверка Gmail завершена. Получено: $accepted; пропущено: $skipped; всего проверено: ${incoming.size}")
+                result = "Проверка завершена. Новых сообщений: $accepted"
+            } catch (e: Exception) {
+                result = e.message ?: "Ошибка синхронизации"
+                logger.error("Ошибка синхронизации: ${e.javaClass.simpleName}: ${result.take(250)}")
+            } finally {
+                syncInProgress = false
+                authChanged++
+                done(result)
+            }
         }
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun McApp() {
-        var selected by remember { mutableStateOf<String?>(null) }
+        var selected by remember {
+            mutableStateOf(repo.lastChat().takeIf { saved -> saved.isNotBlank() && chats.any { it.email.equals(saved, true) } })
+        }
         var settings by remember { mutableStateOf(false) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
@@ -170,7 +246,7 @@ class MainActivity : ComponentActivity() {
                         Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }, navigationIcon = {
-                    if (selected != null || settings || logs) IconButton(onClick = { selected = null; settings = false; logs = false }) { Icon(Icons.Default.ArrowBack, "Назад") }
+                    if (selected != null || settings || logs) IconButton(onClick = { selected = null; repo.setLastChat(null); settings = false; logs = false }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
                     if (!settings && !logs && selected == null) {
                         IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "Новый чат") }
@@ -181,19 +257,48 @@ class MainActivity : ComponentActivity() {
                 when {
                     logs -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         Text("Размер файла: ${logSize} байт", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = { logger.clear(); logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Подчистить лог") } }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Button(
+                                onClick = {
+                                    syncNow {
+                                        status = it
+                                        logText = logger.read()
+                                        logSize = logger.sizeBytes()
+                                    }
+                                },
+                                enabled = token != null && !syncInProgress
+                            ) {
+                                Text(if (syncInProgress) "Проверяем..." else "Проверить почту")
+                            }
+                            TextButton(onClick = {
+                                logger.clear()
+                                logText = logger.read()
+                                logSize = logger.sizeBytes()
+                            }) { Text("Очистить лог") }
+                        }
                         Text(logText, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f).fillMaxWidth())
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
                         Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Не подключён")
-                        Button(onClick = {
-                            try { auth.start(this@MainActivity) } catch (e: Exception) { errorText = e.message ?: "Ошибка OAuth"; logger.add(errorText); authChanged++ }
-                        }) { Text(if (token == null) "Продолжить с Google" else "Подключить / сменить аккаунт") }
+                        if (token == null) {
+                            Button(onClick = {
+                                try {
+                                    auth.start(this@MainActivity)
+                                } catch (e: Exception) {
+                                    errorText = e.message ?: "Ошибка OAuth"
+                                    logger.error("Ошибка запуска OAuth: ${errorText.take(200)}")
+                                    authChanged++
+                                }
+                            }) { Text("Продолжить с Google") }
+                        }
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         HorizontalDivider()
                         Text("Синхронизация", fontWeight = FontWeight.Bold)
-                        Button(onClick = { syncNow { status = it } }, enabled = token != null) { Text("Проверить новые сообщения") }
+                        Button(
+                            onClick = { syncNow { status = it } },
+                            enabled = token != null && !syncInProgress
+                        ) { Text(if (syncInProgress) "Проверяем..." else "Проверить новые сообщения") }
                         Text("Старые письма не импортируются. Точка начала синхронизации устанавливается при первом подключении.", fontSize = 13.sp)
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
@@ -213,7 +318,7 @@ class MainActivity : ComponentActivity() {
                                 val updated = chats.map { c -> if (c.email.equals(email, true)) c.copy(messages = c.messages.map { m -> if (m.id == outgoing.id) m.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED) else m }) else c }
                                 chats = updated; repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
                             }
-                        }, onDelete = { repo.deleteChat(email); chats = repo.chats(); selected = null })
+                        }, onDelete = { repo.deleteChat(email); chats = repo.chats(); selected = null; repo.setLastChat(null) })
                     }
                     else -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         if (token == null) {
@@ -224,7 +329,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             LazyColumn(Modifier.fillMaxSize()) {
                                 items(chats) { chat ->
-                                    Row(Modifier.fillMaxWidth().clickable { selected = chat.email }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(Modifier.fillMaxWidth().clickable { selected = chat.email; repo.setLastChat(chat.email) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Box(Modifier.size(48.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) { Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp) }
                                         Spacer(Modifier.width(12.dp))
                                         Column(Modifier.weight(1f)) {
@@ -245,7 +350,7 @@ class MainActivity : ComponentActivity() {
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый чат") }, text = {
                     OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
                 }, confirmButton = { TextButton(onClick = {
-                    if (email.contains("@")) { val normalized = email.trim().lowercase(); if (chats.none { it.email == normalized }) { chats = chats + McChat(normalized); repo.save(chats) }; selected = normalized; showNew = false }
+                    if (email.contains("@")) { val normalized = email.trim().lowercase(); if (chats.none { it.email == normalized }) { chats = chats + McChat(normalized); repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
                 }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
             }
         }
