@@ -9,6 +9,7 @@ android {
     compileSdk = 35
     defaultConfig {
         applicationId = "ru.mailchat.app"
+        manifestPlaceholders["appAuthRedirectScheme"] = "ru.mailchat.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 2
