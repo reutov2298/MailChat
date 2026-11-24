@@ -25,9 +25,12 @@ class McLogger(context: Context) {
     fun error(message: String) = add("ERROR", message)
 
     @Synchronized
+    fun server(message: String) = add("SERVER", message)
+
+    @Synchronized
     fun add(level: String, message: String) {
         val safeLevel = level.uppercase(Locale.ROOT).takeIf {
-            it in setOf("DEBUG", "INFO", "WARN", "ERROR")
+            it in setOf("DEBUG", "INFO", "WARN", "ERROR", "SERVER")
         } ?: "INFO"
         val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         file.appendText("$stamp [$safeLevel] $message\n", Charsets.UTF_8)
