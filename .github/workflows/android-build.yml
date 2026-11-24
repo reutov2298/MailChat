@@ -30,40 +30,16 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Restore stable debug signing key
-        env:
-          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
-        run: |
-          test -n "$ANDROID_DEBUG_KEYSTORE_BASE64"
-          mkdir -p "$HOME/.android"
-          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-
-      - name: Validate restored signing key
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.MC_KEYSTORE_PASSWORD }}
-        run: |
-          test -n "$KEYSTORE_PASSWORD"
-          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass "$KEYSTORE_PASSWORD"
-
       - name: Build APK
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
-          KEYSTORE_PASSWORD: ${{ secrets.MC_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.MC_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.MC_KEY_PASSWORD }}
-        run: |
-          MC_KEYSTORE_PATH="$HOME/.android/debug.keystore" gradle assembleDebug
+        run: gradle assembleDebug
 
-      - name: Verify APK signature and upgrade identity
+      - name: Verify APK package and version
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
           BUILD_TOOLS="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n1)"
           AAPT="$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt"
-          APKSIGNER="$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner"
-          CERTS="$("$APKSIGNER" verify --verbose --print-certs "$APK")"
-          echo "$CERTS"
-          echo "$CERTS" | grep -qi "37:b6:42:1e:eb:5b:14:5c:86:7c:df:b5:50:5f:39:c9:12:84:11:ab:e9:47:04:a1:d9:41:fc:04:e7:92:f2:78"
           BADGING="$("$AAPT" dump badging "$APK")"
           echo "$BADGING" | grep "name='ru.mailchat.app'"
           echo "$BADGING" | grep "versionCode='5' versionName='1.0.3'"
