@@ -21,6 +21,8 @@ class GmailTransport {
     }
 
     var onRequestStarted: (() -> Unit)? = null
+    var onServerRequest: ((String) -> Unit)? = null
+    var onDiagnostic: ((String) -> Unit)? = null
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
@@ -34,6 +36,8 @@ class GmailTransport {
 
             // The callback/sound fires only when this request is actually about to start.
             onRequestStarted?.invoke()
+            val endpoint = url.substringAfter("/gmail/v1", url).substringBefore("?")
+            onServerRequest?.invoke("$method $endpoint")
             val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
             when (method) {
                 "POST" -> builder.post((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
@@ -55,13 +59,18 @@ class GmailTransport {
     fun send(token: String, from: String, to: String, text: String, chatId: String, publicKey: String, sign: (ByteArray) -> String): String {
         val id = UUID.randomUUID().toString()
         val ts = System.currentTimeMillis() / 1000
-        val normalizedText = text.replace("\r\n", "\n").replace("\r", "\n").trimEnd('\n')
+        val normalizedText = McProtocol.normalizeText(text)
         val senderId = "android-${android.os.Build.MODEL}"
         val version = "1.0.0-prototype"
         val sequence = "1"
         val keyId = from
-        val canonical = listOf("1", id, chatId, senderId, from, to, version, "text", ts.toString(), sequence, keyId, publicKey, normalizedText).joinToString("\n")
+        val canonicalInput = McProtocol.CanonicalInput(
+            id, chatId, senderId, from, to, version, "text", ts.toString(),
+            sequence, keyId, publicKey, normalizedText
+        )
+        val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
+        McProtocol.signatureDiagnostics("sender", canonicalInput, signature).forEach { onDiagnostic?.invoke(it) }
         val technical = listOf(
             "X-MC-Protocol: 1", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
             "X-MC-Sender-ID: $senderId", "X-MC-Sender: $from", "X-MC-Recipient: $to",
