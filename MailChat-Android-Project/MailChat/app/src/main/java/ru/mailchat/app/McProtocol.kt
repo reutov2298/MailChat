@@ -15,7 +15,52 @@ object McProtocol {
         val timestamp: Long
     )
 
-    data class Verification(val parsed: Parsed?, val reason: String?)
+    data class Verification(
+        val parsed: Parsed?,
+        val reason: String?,
+        val diagnostics: List<String> = emptyList()
+    )
+
+    data class CanonicalInput(
+        val messageId: String, val chatId: String, val senderId: String,
+        val sender: String, val recipient: String, val version: String,
+        val messageType: String, val timestamp: String, val sequence: String,
+        val keyId: String, val publicKey: String, val text: String
+    )
+
+    fun normalizeText(value: String): String =
+        value.replace("\r\n", "\n").replace('\r', '\n').trimEnd('\n')
+
+    fun canonical(input: CanonicalInput): String = listOf(
+        "1", input.messageId, input.chatId, input.senderId, input.sender,
+        input.recipient, input.version, input.messageType, input.timestamp,
+        input.sequence, input.keyId, input.publicKey, normalizeText(input.text)
+    ).joinToString("\n")
+
+    private fun sha256(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+
+    fun signatureDiagnostics(role: String, input: CanonicalInput, signature: String): List<String> {
+        val fields = linkedMapOf(
+            "protocol" to "1", "messageId" to input.messageId, "chatId" to input.chatId,
+            "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
+            "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
+            "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
+            "text" to normalizeText(input.text)
+        )
+        val bytes = canonical(input).toByteArray(Charsets.UTF_8)
+        val signatureBytes = runCatching { Base64.getDecoder().decode(signature) }.getOrNull()
+        val lines = mutableListOf(
+            "MC_SIG_DIAG role=$role messageId=${input.messageId} fields=${fields.size} textBytes=${normalizeText(input.text).toByteArray(Charsets.UTF_8).size} canonicalBytes=${bytes.size} canonicalSha256=${sha256(bytes)}",
+            "MC_SIG_DIAG signatureBytes=${signatureBytes?.size ?: -1} signatureSha256=${signatureBytes?.let { sha256(it) } ?: "invalid"} publicKeySha256=${sha256(input.publicKey.toByteArray(Charsets.UTF_8))}"
+        )
+        fields.forEach { (name, value) ->
+            val fieldBytes = value.toByteArray(Charsets.UTF_8)
+            lines += "MC_SIG_FIELD name=$name bytes=${fieldBytes.size} sha256=${sha256(fieldBytes)}"
+        }
+        return lines
+    }
 
     private val required = listOf(
         "x-mc-protocol", "x-mc-message-id", "x-mc-chat-id",
@@ -133,52 +178,38 @@ object McProtocol {
                 )
             )
 
-            // MIME/Gmail may convert LF to CRLF. Signatures are calculated over LF.
-            // Normalize line endings exactly as in GmailTransport.send().
-            val text = mail.body.substring(end + finish.length)
-                .replace("\r\n", "\n")
-                .replace('\r', '\n')
-                .trimStart('\n')
-                .trimEnd('\n')
+            // Strip only the MIME separator; preserve leading user newlines.
+            var rawText = mail.body.substring(end + finish.length)
+            rawText = when {
+                rawText.startsWith("\r\n\r\n") -> rawText.substring(4)
+                rawText.startsWith("\n\n") -> rawText.substring(2)
+                rawText.startsWith("\r\n") -> rawText.substring(2)
+                rawText.startsWith("\n") -> rawText.substring(1)
+                else -> rawText
+            }
+            val text = normalizeText(rawText)
 
             val messageId = values.getValue("x-mc-message-id")
             val chatId = values.getValue("x-mc-chat-id")
             val timestamp = values.getValue("x-mc-timestamp").toLong()
-
-            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) >
-                60L * 60L * 24L * 30L
-            ) {
+            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > 60L * 60L * 24L * 30L) {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
-            val canonical = listOf(
-                "1",
-                messageId,
-                chatId,
-                values.getValue("x-mc-sender-id"),
-                sender,
-                recipient,
-                values.getValue("x-mc-version"),
-                values.getValue("x-mc-message-type"),
-                timestamp.toString(),
-                values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"),
-                values.getValue("x-mc-public-key"),
-                text
-            ).joinToString("\n")
-
-            if (!McCrypto.verify(
-                publicKey,
-                canonical.toByteArray(Charsets.UTF_8),
-                values.getValue("x-mc-signature")
-            )) {
-                return Verification(null, "Криптографическая подпись не прошла проверку")
+            val input = CanonicalInput(
+                messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
+                values.getValue("x-mc-version"), values.getValue("x-mc-message-type"),
+                timestamp.toString(), values.getValue("x-mc-sequence"),
+                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text
+            )
+            val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
+            val signature = values.getValue("x-mc-signature")
+            val diagnostics = signatureDiagnostics("receiver", input, signature)
+            if (!McCrypto.verify(publicKey, canonicalBytes, signature)) {
+                return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
             }
 
-            return Verification(
-                Parsed(messageId, chatId, sender, recipient, text, timestamp),
-                null
-            )
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }
