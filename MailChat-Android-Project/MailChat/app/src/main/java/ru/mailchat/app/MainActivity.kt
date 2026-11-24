@@ -168,7 +168,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun syncNow(done: (String) -> Unit = {}, source: String = "ручная") {
+    private fun syncNow(source: String = "ручная", done: (String) -> Unit = {}) {
         if (syncInProgress) {
             done("Проверка уже выполняется")
             return
