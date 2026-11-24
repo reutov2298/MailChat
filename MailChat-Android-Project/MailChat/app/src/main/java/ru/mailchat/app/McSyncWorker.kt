@@ -64,6 +64,11 @@ class McSyncWorker(
                     continue
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
+                if (repo.isChatDeleted(parsed.sender)) {
+                    repo.markProcessed(mail.id)
+                    logger.info("Фоновое письмо пропущено: чат удалён пользователем: ${parsed.sender}")
+                    continue
+                }
 
                 if (chats.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
                     repo.markProcessed(mail.id)
@@ -97,7 +102,7 @@ class McSyncWorker(
             }
 
             if (accepted > 0) showIncomingNotification(accepted)
-            logger.info("Фоновая проверка завершена. Новых сообщений: $accepted")
+            logger.info("Фоновая проверка завершена. Новых сообщений: $accepted; получение выполнено одним batch-запросом содержимого")
             Result.success()
         } catch (e: Exception) {
             logger.error("Ошибка фоновой проверки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
