@@ -290,7 +290,30 @@ class MainActivity : ComponentActivity() {
         var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
         var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
-        var pendingDeleteChat by remember { mutableStateOf<String?>(null) }
+        var pendingDeleteChat by remember { mutableStateOf<McChat?>(null) }
+        val logListState = rememberLazyListState()
+        val logLines = remember(logText) { logText.lineSequence().filter { it.isNotBlank() }.toList() }
+
+        LaunchedEffect(logs) {
+            while (logs) {
+                val latest = logger.read()
+                if (latest != logText) logText = latest
+                logSize = logger.sizeBytes()
+                delay(250)
+            }
+        }
+        LaunchedEffect(logs, logLines.size) {
+            if (logs && logLines.isNotEmpty()) logListState.scrollToItem(logLines.lastIndex)
+        }
+        LaunchedEffect(pendingDeleteChat) {
+            val item = pendingDeleteChat ?: return@LaunchedEffect
+            delay(5000)
+            if (pendingDeleteChat?.email.equals(item.email, true)) {
+                repo.deleteChat(item.email)
+                pendingDeleteChat = null
+                logger.info("Удаление диалога окончательно подтверждено: ${item.email}")
+            }
+        }
         val applySyncSettings = {
             repo.saveSyncSettings(
                 openSeconds.toIntOrNull() ?: repo.openIntervalSeconds(),
@@ -311,7 +334,9 @@ class MainActivity : ComponentActivity() {
             if (logs) logs = false else { settings = false; selected = null; repo.setLastChat(null) }
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
-            Scaffold(topBar = {
+            Scaffold(
+                snackbarHost = { SnackbarHost(snackbarHostState) },
+                topBar = {
                 TopAppBar(title = {
                     Column {
                         Text(if (logs) "Логирование" else if (settings) "Настройки" else selected?.substringBefore('@') ?: "MC", fontWeight = FontWeight.Bold)
@@ -362,13 +387,21 @@ class MainActivity : ComponentActivity() {
                                 logSize = logger.sizeBytes()
                             }) { Text("Очистить лог") }
                         }
-                        Text(
-                            logText,
-                            fontSize = 12.sp,
-                            lineHeight = 17.sp,
-                            modifier = Modifier.weight(1f).fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                        )
+                        LazyColumn(
+                            state = logListState,
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentPadding = PaddingValues(vertical = 6.dp)
+                        ) {
+                            items(logLines) { line ->
+                                val color = when {
+                                    line.contains("[SERVER]") -> Color(0xFF55D68B)
+                                    line.contains("[ERROR]") || line.contains("[WARN]") -> Color(0xFFFF6262)
+                                    else -> Color.White
+                                }
+                                Text(line, color = color, fontSize = 12.sp, lineHeight = 17.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp))
+                            }
+                        }
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
