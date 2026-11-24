@@ -16,7 +16,7 @@
                 <data android:scheme="${appAuthRedirectScheme}" />
             </intent-filter>
         </activity>
-        <activity android:name=".MainActivity" android:exported="true" launchMode="singleTop">
+        <activity android:name=".MainActivity" android:exported="true" launchMode="singleTop" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
