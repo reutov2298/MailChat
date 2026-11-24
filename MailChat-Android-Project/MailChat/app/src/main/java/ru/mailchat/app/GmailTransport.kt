@@ -47,7 +47,15 @@ class GmailTransport {
             }
             http.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw IllegalStateException("Gmail API ${response.code}: ${text.take(400)}")
+                val isPeopleApi = url.startsWith("https://people.googleapis.com/")
+                if (isPeopleApi) {
+                    onDiagnostic?.invoke("People API HTTP: code=${response.code}, successful=${response.isSuccessful}, responseBytes=${text.toByteArray(StandardCharsets.UTF_8).size}")
+                    if (!response.isSuccessful) onDiagnostic?.invoke("People API error response: ${text.take(800)}")
+                }
+                if (!response.isSuccessful) {
+                    val apiName = if (isPeopleApi) "People API" else "Gmail API"
+                    throw IllegalStateException("$apiName ${response.code}: ${text.take(800)}")
+                }
                 text
             }
         }
@@ -58,19 +66,34 @@ class GmailTransport {
     }
 
     fun contactProfile(token: String, email: String): ContactProfile? {
+        onDiagnostic?.invoke("People API: поиск контакта начат; emailProvided=${email.isNotBlank()}")
         val query = URLEncoder.encode(email.trim(), "UTF-8")
         val url = "https://people.googleapis.com/v1/people:searchContacts?query=$query&pageSize=10&readMask=names,emailAddresses,photos"
         val root = JSONObject(request(url, token))
-        val results = root.optJSONArray("results") ?: return null
+        val results = root.optJSONArray("results")
+        val resultCount = results?.length() ?: 0
+        onDiagnostic?.invoke("People API: resultsCount=$resultCount")
+        if (results == null || resultCount == 0) {
+            onDiagnostic?.invoke("People API: контакты не найдены или поле results отсутствует")
+            return null
+        }
         for (i in 0 until results.length()) {
-            val person = results.optJSONObject(i)?.optJSONObject("person") ?: continue
-            val emails = person.optJSONArray("emailAddresses") ?: continue
-            val exactMatch = (0 until emails.length()).any { emails.optJSONObject(it)?.optString("value").equals(email, true) }
+            val person = results.optJSONObject(i)?.optJSONObject("person")
+            if (person == null) {
+                onDiagnostic?.invoke("People API: result[$i] не содержит person")
+                continue
+            }
+            val emails = person.optJSONArray("emailAddresses")
+            val emailCount = emails?.length() ?: 0
+            val exactMatch = emails != null && (0 until emails.length()).any { emails.optJSONObject(it)?.optString("value").equals(email, true) }
+            onDiagnostic?.invoke("People API: result[$i] emailCount=$emailCount exactEmailMatch=$exactMatch")
             if (!exactMatch) continue
             val name = person.optJSONArray("names")?.optJSONObject(0)?.optString("displayName")?.trim()?.takeIf { it.isNotBlank() }
             val photo = person.optJSONArray("photos")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+            onDiagnostic?.invoke("People API: exact match; namePresent=${!name.isNullOrBlank()}, photoPresent=${!photo.isNullOrBlank()}")
             return ContactProfile(name, photo)
         }
+        onDiagnostic?.invoke("People API: точного совпадения email среди результатов нет")
         return null
     }
 
@@ -100,11 +123,12 @@ class GmailTransport {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
             technical.forEach { append(it).append("\r\n") }
-            append("\r\nНиже приведены технические данные MC, продублированные из заголовков электронного письма:\r\n")
+            append("\r\n")
+            append(normalizedText.replace("\n", "\r\n"))
+            append("\r\n\r\n\r\nНиже приведены технические данные MC, продублированные из заголовков электронного письма:\r\n")
             append("-----BEGIN MC DATA-----\r\n")
             technical.forEach { append(it).append("\r\n") }
-            append("-----END MC DATA-----\r\n\r\n")
-            append(normalizedText.replace("\n", "\r\n"))
+            append("-----END MC DATA-----\r\n")
         }
         val encoded = Base64.encodeToString(mime.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val payload = JSONObject().put("raw", encoded).toString()

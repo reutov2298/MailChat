@@ -276,10 +276,11 @@ class MainActivity : ComponentActivity() {
                         try {
                             withContext(Dispatchers.IO) { gmail.contactProfile(t, parsed.sender) }
                         } catch (e: Exception) {
-                            logger.debug("Профиль контакта недоступен для ${parsed.sender}: ${e.message.orEmpty().take(120)}")
+                            logger.error("People API: ошибка получения профиля: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(500)}")
                             null
                         }
                     } else null
+                    logger.info("Профиль контакта: lookup=${if (needsContactProfile) "выполнен" else "пропущен"}, result=${contactProfile != null}, namePresent=${!contactProfile?.name.isNullOrBlank()}, photoPresent=${!contactProfile?.photoUrl.isNullOrBlank()}, senderHeaderNamePresent=${!incomingName.isNullOrBlank()}")
                     val resolvedName = incomingName ?: contactProfile?.name
                     if (index >= 0) {
                         val existing = current[index]
@@ -296,6 +297,8 @@ class MainActivity : ComponentActivity() {
                     }
 
                     repo.save(current)
+                    val savedChat = current.firstOrNull { it.email.equals(parsed.sender, true) }
+                    logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "From"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
                     repo.markProcessed(mail.id)
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
@@ -397,8 +400,11 @@ class MainActivity : ComponentActivity() {
                             deletions.forEach { deletion ->
                                 val secondsLeft = ceil(((deletion.value - deleteCountdownNow).coerceAtLeast(0L)) / 1000.0).toInt()
                                 if (secondsLeft > 0) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    val deletionName = chats.firstOrNull { it.email.equals(deletion.key, true) }?.title?.takeIf { !it.equals(deletion.key, true) } ?: deletion.key
-                                    Text("Удаление ${deletionName} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                    val deletionChat = chats.firstOrNull { it.email.equals(deletion.key, true) }
+                                    val deletionName = deletionChat?.senderName?.takeIf { it.isNotBlank() }
+                                        ?: deletionChat?.title?.takeIf { !it.equals(deletion.key, true) }
+                                        ?: deletion.key
+                                    Text("Удаление чата с ${deletionName} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
                                     TextButton(onClick = {
                                         repo.cancelChatDeletion(deletion.key)
                                         pendingDeleteDeadlines.remove(deletion.key)
@@ -720,6 +726,12 @@ class MainActivity : ComponentActivity() {
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
         LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
+        LaunchedEffect(chat.email) {
+            snapshotFlow { WindowInsets.ime.getBottom(density) }.collect {
+                val lastIndex = chat.messages.lastIndex
+                if (lastIndex >= 0) listState.scrollToItem(lastIndex)
+            }
+        }
         LaunchedEffect(chat.messages.size) {
             if (scrollAfterSend && chat.messages.isNotEmpty()) {
                 listState.animateScrollToItem(chat.messages.lastIndex)
