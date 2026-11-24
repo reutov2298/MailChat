@@ -454,7 +454,7 @@ class MainActivity : ComponentActivity() {
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
                         Conversation(chat, Modifier.padding(padding), onSend = { body ->
                             val outgoing = McMessage(chatId = email.lowercase(), sender = accountEmail, recipient = email, text = body, incoming = false, state = DeliveryState.QUEUED)
-                            chats = (chats.filterNot { it.email.equals(email, true) } + chat.copy(messages = chat.messages + outgoing)).sortedBy { it.email }
+                            chats = (chats.filterNot { it.email.equals(email, true) } + chat.copy(messages = chat.messages + outgoing)).sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
                             repo.save(chats)
                             sendMessage(email, body) { error ->
                                 val updated = chats.map { c -> if (c.email.equals(email, true)) c.copy(messages = c.messages.map { m -> if (m.id == outgoing.id) m.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED) else m }) else c }
@@ -470,7 +470,7 @@ class MainActivity : ComponentActivity() {
                             Button(onClick = { settings = true }) { Text("Подключить Gmail") }
                         } else {
                             LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                                items(chats, key = { it.email }) { chat ->
+                                items(chats.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
                                     Card(
                                         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
                                             .pointerInput(chat.email) {
@@ -547,7 +547,7 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
                     }
                 }, confirmButton = { TextButton(onClick = {
-                    if (email.contains("@")) { val normalized = email.trim().lowercase(); val title = displayName.trim().ifBlank { normalized.substringBefore("@") }; if (chats.none { it.email.equals(normalized, true) }) { chats = chats + McChat(normalized, title); repo.save(chats) } else { chats = chats.map { if (it.email.equals(normalized, true)) it.copy(title = title) else it }; repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
+                    if (email.contains("@")) { val normalized = email.trim().lowercase(); repo.restoreChat(normalized); val title = displayName.trim().ifBlank { normalized.substringBefore("@") }; if (chats.none { it.email.equals(normalized, true) }) { chats = chats + McChat(normalized, title); repo.save(chats) } else { chats = chats.map { if (it.email.equals(normalized, true)) it.copy(title = title) else it }; repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
                 }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
             }
         }
