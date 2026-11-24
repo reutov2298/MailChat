@@ -7,6 +7,7 @@ import java.util.Date
 import java.util.Locale
 
 class McLogger(context: Context) {
+    companion object { private val fileLock = Any() }
     private val file = File(context.filesDir, "mc.log")
 
     @Synchronized
@@ -29,26 +30,30 @@ class McLogger(context: Context) {
 
     @Synchronized
     fun add(level: String, message: String) {
-        val safeLevel = level.uppercase(Locale.ROOT).takeIf {
-            it in setOf("DEBUG", "INFO", "WARN", "ERROR", "SERVER")
-        } ?: "INFO"
-        val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date())
-        file.appendText("$stamp [$safeLevel] $message\n", Charsets.UTF_8)
+        synchronized(fileLock) {
+            val safeLevel = level.uppercase(Locale.ROOT).takeIf {
+                it in setOf("DEBUG", "INFO", "WARN", "ERROR", "SERVER")
+            } ?: "INFO"
+            val stamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+            file.appendText("$stamp [$safeLevel] $message\n", Charsets.UTF_8)
 
-        if (file.length() > 512 * 1024) {
-            val tail = file.readLines().takeLast(1500).joinToString("\n", postfix = "\n")
-            file.writeText(tail, Charsets.UTF_8)
+            if (file.length() > 512 * 1024) {
+                val tail = file.readLines().takeLast(1500).joinToString("\n", postfix = "\n")
+                file.writeText(tail, Charsets.UTF_8)
+            }
         }
     }
 
     @Synchronized
-    fun read(): String = if (file.exists()) file.readText(Charsets.UTF_8) else ""
+    fun read(): String = synchronized(fileLock) {
+        if (file.exists()) file.readText(Charsets.UTF_8) else ""
+    }
 
     @Synchronized
-    fun clear() {
+    fun clear() = synchronized(fileLock) {
         file.writeText("", Charsets.UTF_8)
         add("INFO", "Журнал очищен")
     }
 
-    fun sizeBytes(): Long = file.length()
+    fun sizeBytes(): Long = synchronized(fileLock) { file.length() }
 }
