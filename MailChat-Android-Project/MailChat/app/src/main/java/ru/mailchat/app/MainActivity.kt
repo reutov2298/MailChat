@@ -493,7 +493,7 @@ class MainActivity : ComponentActivity() {
                                                             logger.info("Диалог удалён из списка, доступна отмена: ${chat.email}")
                                                             snackbarScope.launch {
                                                                 val result = snackbarHostState.showSnackbar(
-                                                                    message = "Диалог удалён", actionLabel = "Отмена",
+                                                                    message = "Диалог удалён — отмена в течение 5 секунд", actionLabel = "Отмена",
                                                                     withDismissAction = true, duration = SnackbarDuration.Indefinite
                                                                 )
                                                                 if (result == SnackbarResult.ActionPerformed) {
