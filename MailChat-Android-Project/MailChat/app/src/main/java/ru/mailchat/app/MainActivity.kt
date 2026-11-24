@@ -373,7 +373,7 @@ class MainActivity : ComponentActivity() {
                 bottomBar = {
                     val deletions = pendingDeleteDeadlines.entries.sortedBy { it.value }
                     if (deletions.isNotEmpty()) Surface(
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).padding(bottom = 72.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
                         shape = RoundedCornerShape(18.dp), tonalElevation = 4.dp, shadowElevation = 6.dp
                     ) {
@@ -563,7 +563,7 @@ class MainActivity : ComponentActivity() {
                                     if (syncInProgress) Spacer(Modifier.width(8.dp))
                                     if (syncInProgress) Text("Проверяем почту...", fontSize = 12.sp)
                                 }
-                                LazyColumn(state = chatListState, modifier = Modifier.weight(1f).nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                LazyColumn(state = chatListState, modifier = Modifier.weight(1f).nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) {
                                 items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
                                     val dragOffset = remember(chat.email) { mutableFloatStateOf(0f) }
                                     Card(
@@ -590,9 +590,9 @@ class MainActivity : ComponentActivity() {
                                                 )
                                             }
                                             .clickable { selected = chat.email; repo.setLastChat(chat.email) },
-                                        shape = RoundedCornerShape(20.dp),
-                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF192B3B)),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                        shape = RoundedCornerShape(0.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
                                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                                             Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
@@ -601,12 +601,10 @@ class MainActivity : ComponentActivity() {
                                             Spacer(Modifier.width(13.dp))
                                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
-                                                if (!chat.title.equals(chat.email, true)) Text(chat.email, color = Color(0xFF9EADBC), maxLines = 1, fontSize = 11.sp)
-                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC), maxLines = 1, fontSize = 13.sp)
+                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC).copy(alpha = 0.85f), maxLines = 1, fontSize = 13.sp)
                                             }
-                                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                            Column(horizontalAlignment = Alignment.End) {
                                                 Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
-                                                Text(chat.messages.lastOrNull()?.let { when (it.state) { DeliveryState.QUEUED -> "◷"; DeliveryState.SENT_TO_GMAIL -> "✓"; DeliveryState.DELIVERED -> "✓✓"; DeliveryState.FAILED -> "!" } } ?: "", color = if (chat.messages.lastOrNull()?.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B), fontSize = 14.sp)
                                             }
                                         }
                                     }
@@ -718,12 +716,31 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
                                 if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
                                 Text(message.text)
-                                Text(
-                                    SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
-                                        .format(Date(message.timestamp * 1000L)),
-                                    fontSize = 10.sp,
-                                    color = Color.LightGray
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
+                                            .format(Date(message.timestamp * 1000L)),
+                                        fontSize = 10.sp,
+                                        color = Color.LightGray
+                                    )
+                                    if (!message.incoming) {
+                                        Spacer(Modifier.width(4.dp))
+                                        val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
+                                        when (message.state) {
+                                            DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                            DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                            DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
+                                                Text("✓", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                                Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                            }
+                                            DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
