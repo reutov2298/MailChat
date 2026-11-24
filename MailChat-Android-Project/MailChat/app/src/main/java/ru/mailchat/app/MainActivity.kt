@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
     private var authChanged by mutableIntStateOf(0)
     private var chats by mutableStateOf<List<McChat>>(emptyList())
     private var syncInProgress by mutableStateOf(false)
-    private var appForeground = false
+    private var appForeground = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -176,6 +177,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         val t = token ?: run { done("Нет подключения Gmail"); return }
+        if (!repo.acquireSyncLock()) { done("Проверка уже выполняется"); return }
         val since = repo.baseline().coerceAtLeast(1L)
         syncInProgress = true
         logger.add("Начата проверка почты. Точка синхронизации: $since")
@@ -267,6 +269,7 @@ class MainActivity : ComponentActivity() {
                 result = e.message ?: "Ошибка синхронизации"
                 logger.error("Ошибка синхронизации: ${e.javaClass.simpleName}: ${result.take(250)}")
             } finally {
+                repo.releaseSyncLock()
                 syncInProgress = false
                 authChanged++
                 done(result)
@@ -304,6 +307,10 @@ class MainActivity : ComponentActivity() {
             getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         }
         val refresh = authChanged
+        BackHandler(enabled = settings || logs || selected != null) {
+            if (settings) applySyncSettings()
+            if (logs) logs = false else { settings = false; selected = null; repo.setLastChat(null) }
+        }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(topBar = {
                 TopAppBar(title = {
