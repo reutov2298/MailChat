@@ -2,16 +2,25 @@ package ru.mailchat.app
 
 import android.content.ClipData
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,11 +35,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.Security
@@ -53,15 +66,28 @@ class MainActivity : ComponentActivity() {
     private var authChanged by mutableIntStateOf(0)
     private var chats by mutableStateOf<List<McChat>>(emptyList())
     private var syncInProgress by mutableStateOf(false)
+    private var appForeground = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
+        gmail.onRequestStarted = { if (repo.diagnosticClickEnabled()) playDiagnosticClick() }
+        McSyncScheduler.schedule(this, repo.closedIntervalSeconds())
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102)
+        }
         chats = repo.chats()
         logger.add("Приложение запущено. Восстановлено чатов: ${chats.size}")
         if (!handleAuthIntent(intent) && auth.isConnected()) refreshToken()
         setContent { McApp() }
+        lifecycleScope.launch {
+            while (isActive) {
+                val seconds = if (appForeground) repo.openIntervalSeconds() else repo.minimizedIntervalSeconds()
+                delay(seconds.coerceAtLeast(5) * 1000L)
+                if (token != null) syncNow()
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -116,6 +142,7 @@ class MainActivity : ComponentActivity() {
                 }
                 logger.add("Gmail подключён: ${profile.email}")
                 authChanged++
+                syncNow()
             } catch (e: Exception) {
                 errorText = e.message ?: "Ошибка Gmail API"
                 logger.add("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
@@ -234,6 +261,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 chats = repo.chats()
+                if (accepted > 0) playIncomingSound()
                 logger.add("Проверка Gmail завершена. Получено: $accepted; пропущено: $skipped; всего проверено: ${incoming.size}")
                 result = "Проверка завершена. Новых сообщений: $accepted"
             } catch (e: Exception) {
@@ -258,6 +286,21 @@ class MainActivity : ComponentActivity() {
         var status by remember { mutableStateOf("") }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
+        var openSeconds by remember { mutableStateOf(repo.openIntervalSeconds().toString()) }
+        var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
+        var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
+        var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
+        var pendingDeleteChat by remember { mutableStateOf<String?>(null) }
+        val applySyncSettings = {
+            repo.saveSyncSettings(
+                openSeconds.toIntOrNull() ?: repo.openIntervalSeconds(),
+                minimizedSeconds.toIntOrNull() ?: repo.minimizedIntervalSeconds(),
+                closedSeconds.toIntOrNull() ?: repo.closedIntervalSeconds(),
+                diagnosticClick
+            )
+            McSyncScheduler.schedule(this@MainActivity, repo.closedIntervalSeconds())
+            logger.add("Настройки интервалов синхронизации применены")
+        }
         val clipboardManager = remember {
             getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         }
@@ -270,7 +313,10 @@ class MainActivity : ComponentActivity() {
                         Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }, navigationIcon = {
-                    if (selected != null || settings || logs) IconButton(onClick = { selected = null; repo.setLastChat(null); settings = false; logs = false }) { Icon(Icons.Default.ArrowBack, "Назад") }
+                    if (selected != null || settings || logs) IconButton(onClick = {
+                        if (settings) applySyncSettings()
+                        selected = null; repo.setLastChat(null); settings = false; logs = false
+                    }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
                     if (!settings && !logs && selected == null) {
                         IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "Новый чат") }
@@ -319,7 +365,7 @@ class MainActivity : ComponentActivity() {
                                 .verticalScroll(rememberScrollState())
                         )
                     }
-                    settings -> Column(Modifier.padding(padding).fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
                         Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Не подключён")
                         if (token == null) {
@@ -335,7 +381,17 @@ class MainActivity : ComponentActivity() {
                         }
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         HorizontalDivider()
-                        Text("Синхронизация", fontWeight = FontWeight.Bold)
+                        Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
+                        OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
+                        OutlinedTextField(value = minimizedSeconds, onValueChange = { minimizedSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение свёрнуто") }, singleLine = true)
+                        OutlinedTextField(value = closedSeconds, onValueChange = { closedSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение закрыто") }, singleLine = true)
+                        Text("Для фоновой проверки Android ограничивает периодические задачи минимум 15 минутами. Принудительная остановка приложения системой или пользователем может остановить фоновые проверки.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = diagnosticClick, onCheckedChange = { diagnosticClick = it })
+                            Text("Звук при каждом обращении к серверу", fontSize = 14.sp)
+                        }
+                        HorizontalDivider()
+                        Text("Ручная проверка", fontWeight = FontWeight.Bold)
                         Button(
                             onClick = { syncNow { status = it } },
                             enabled = token != null && !syncInProgress
@@ -345,6 +401,9 @@ class MainActivity : ComponentActivity() {
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
                         Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        HorizontalDivider()
+                        Text("Версия: ${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Номер сборки: ${BuildConfig.VERSION_CODE}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (errorText.isNotBlank()) Text(errorText, color = MaterialTheme.colorScheme.error)
                         if (status.isNotBlank()) Text(status)
                     }
@@ -359,7 +418,7 @@ class MainActivity : ComponentActivity() {
                                 val updated = chats.map { c -> if (c.email.equals(email, true)) c.copy(messages = c.messages.map { m -> if (m.id == outgoing.id) m.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED) else m }) else c }
                                 chats = updated; repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
                             }
-                        }, onDelete = { repo.deleteChat(email); chats = repo.chats(); selected = null; repo.setLastChat(null) })
+                        })
                     }
                     else -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         if (token == null) {
@@ -370,7 +429,14 @@ class MainActivity : ComponentActivity() {
                         } else {
                             LazyColumn(Modifier.fillMaxSize()) {
                                 items(chats) { chat ->
-                                    Row(Modifier.fillMaxWidth().clickable { selected = chat.email; repo.setLastChat(chat.email) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(Modifier.fillMaxWidth().pointerInput(chat.email) {
+                                    var drag = 0f
+                                    detectHorizontalDragGestures(
+                                        onHorizontalDrag = { change, amount -> drag += amount; change.consume() },
+                                        onDragEnd = { if (drag < -100f) pendingDeleteChat = chat.email; drag = 0f },
+                                        onDragCancel = { drag = 0f }
+                                    )
+                                }.clickable { selected = chat.email; repo.setLastChat(chat.email) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                         Box(Modifier.size(48.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) { Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp) }
                                         Spacer(Modifier.width(12.dp))
                                         Column(Modifier.weight(1f)) {
@@ -388,20 +454,36 @@ class MainActivity : ComponentActivity() {
             }
             if (showNew) {
                 var email by remember { mutableStateOf("") }
-                AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый чат") }, text = {
-                    OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
+                var displayName by remember { mutableStateOf("") }
+                AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
+                        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
+                    }
                 }, confirmButton = { TextButton(onClick = {
-                    if (email.contains("@")) { val normalized = email.trim().lowercase(); if (chats.none { it.email == normalized }) { chats = chats + McChat(normalized); repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
+                    if (email.contains("@")) { val normalized = email.trim().lowercase(); val title = displayName.trim().ifBlank { normalized.substringBefore("@") }; if (chats.none { it.email.equals(normalized, true) }) { chats = chats + McChat(normalized, title); repo.save(chats) } else { chats = chats.map { if (it.email.equals(normalized, true)) it.copy(title = title) else it }; repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
                 }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
+            }
+            pendingDeleteChat?.let { email ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteChat = null },
+                    title = { Text("Удалить чат?") },
+                    text = { Text("Переписка с $email будет удалена с этого устройства.") },
+                    confirmButton = { TextButton(onClick = { repo.deleteChat(email); chats = repo.chats(); if (selected.equals(email, true)) selected = null; pendingDeleteChat = null }) { Text("Удалить") } },
+                    dismissButton = { TextButton(onClick = { pendingDeleteChat = null }) { Text("Отмена") } }
+                )
             }
         }
     }
 
-    @Composable private fun Conversation(chat: McChat, modifier: Modifier, onSend: (String) -> Unit, onDelete: () -> Unit) {
+    @Composable private fun Conversation(chat: McChat, modifier: Modifier, onSend: (String) -> Unit) {
         var draft by remember { mutableStateOf("") }
-        Column(modifier.fillMaxSize().padding(10.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = onDelete) { Icon(Icons.Default.Delete, null); Text("Удалить чат") } }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
+        val listState = rememberLazyListState()
+        LaunchedEffect(chat.messages.size) {
+            if (chat.messages.isNotEmpty()) listState.animateScrollToItem(chat.messages.lastIndex)
+        }
+        Column(modifier.fillMaxSize().imePadding().padding(10.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(chat.messages) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(color = if (message.incoming) Color(0xFF263746) else Color(0xFF185C45), shape = RoundedCornerShape(16.dp)) {
@@ -424,6 +506,26 @@ class MainActivity : ComponentActivity() {
                 OutlinedTextField(value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f), placeholder = { Text("Сообщение...") }, shape = RoundedCornerShape(24.dp), maxLines = 4)
                 IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft.trim()); draft = "" } }) { Icon(Icons.Default.Send, "Отправить", tint = Blue) }
             }
+        }
+    }
+
+    override fun onResume() { super.onResume(); appForeground = true }
+
+    override fun onPause() { appForeground = false; super.onPause() }
+
+    private fun playDiagnosticClick() {
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 18)
+            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 55)
+            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 150)
+        }
+    }
+
+    private fun playIncomingSound() {
+        runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 65)
+            tone.startTone(ToneGenerator.TONE_PROP_ACK, 180)
+            Handler(Looper.getMainLooper()).postDelayed({ tone.release() }, 250)
         }
     }
 
