@@ -27,8 +27,10 @@ class McSyncWorker(
     override suspend fun doWork(): Result {
         val auth = McAuth(applicationContext)
         val repo = McRepository(applicationContext)
+        var lockAcquired = false
         return try {
             if (!repo.acquireSyncLock()) return Result.success()
+            lockAcquired = true
             val token = suspendCancellableCoroutine<String?> { continuation ->
                 auth.accessToken { access, _ ->
                     if (continuation.isActive) continuation.resume(access)
@@ -88,7 +90,7 @@ class McSyncWorker(
         } catch (_: Exception) {
             Result.retry()
         } finally {
-            repo.releaseSyncLock()
+            if (lockAcquired) repo.releaseSyncLock()
             auth.close()
         }
     }
