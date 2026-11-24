@@ -28,6 +28,7 @@ class McSyncWorker(
         val auth = McAuth(applicationContext)
         val repo = McRepository(applicationContext)
         return try {
+            if (!repo.acquireSyncLock()) return Result.success()
             val token = suspendCancellableCoroutine<String?> { continuation ->
                 auth.accessToken { access, _ ->
                     if (continuation.isActive) continuation.resume(access)
@@ -87,6 +88,7 @@ class McSyncWorker(
         } catch (_: Exception) {
             Result.retry()
         } finally {
+            repo.releaseSyncLock()
             auth.close()
         }
     }
