@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
                         }
                         continue
                     }
+                    logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
 
                     if (mail.spam) {
                         withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
@@ -483,6 +484,7 @@ class MainActivity : ComponentActivity() {
                                                                 snackbarHostState.currentSnackbarData?.dismiss()
                                                             }
                                                             pendingDeleteChat = chat
+                                                            repo.deleteChat(chat.email)
                                                             chats = chats.filterNot { it.email.equals(chat.email, true) }
                                                             if (selected.equals(chat.email, true)) {
                                                                 selected = null
