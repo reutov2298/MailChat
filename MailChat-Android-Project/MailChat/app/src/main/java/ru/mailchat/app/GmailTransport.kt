@@ -12,26 +12,40 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class GmailTransport {
+    companion object {
+        // Serialize Gmail API calls across all transport instances and keep a
+        // minimum gap between request starts to prevent bursts from sync/send/worker.
+        private val requestMonitor = Any()
+        private var lastRequestStartedAt = 0L
+        private const val MIN_REQUEST_GAP_MS = 500L
+    }
+
     var onRequestStarted: (() -> Unit)? = null
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>)
 
-    private fun request(url: String, token: String, method: String = "GET", body: String? = null): String {
-        onRequestStarted?.invoke()
-        val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
-        when (method) {
-            "POST" -> builder.post((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
-            "PUT" -> builder.put((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
-            else -> builder.get()
+    private fun request(url: String, token: String, method: String = "GET", body: String? = null): String =
+        synchronized(requestMonitor) {
+            val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
+            if (waitMs > 0) Thread.sleep(waitMs)
+            lastRequestStartedAt = System.currentTimeMillis()
+
+            // The callback/sound fires only when this request is actually about to start.
+            onRequestStarted?.invoke()
+            val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
+            when (method) {
+                "POST" -> builder.post((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
+                "PUT" -> builder.put((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
+                else -> builder.get()
+            }
+            http.newCall(builder.build()).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (!response.isSuccessful) throw IllegalStateException("Gmail API ${response.code}: ${text.take(400)}")
+                text
+            }
         }
-        http.newCall(builder.build()).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Gmail API ${response.code}: ${text.take(400)}")
-            return text
-        }
-    }
 
     fun profile(token: String): Profile {
         val j = JSONObject(request("${GmailConfig.GMAIL_API}/profile", token))
