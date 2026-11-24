@@ -45,7 +45,7 @@ jobs:
         run: |
           MC_KEYSTORE_PATH="$HOME/.android/debug.keystore" \
           KEYSTORE_PASSWORD=android \
-          KEY_ALIAS=androiddebugkey \
+          KEY_ALIAS=AndroidDebugKey \
           KEY_PASSWORD=android \
           gradle assembleDebug
 
