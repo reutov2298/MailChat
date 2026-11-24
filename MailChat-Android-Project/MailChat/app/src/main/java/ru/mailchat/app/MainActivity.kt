@@ -313,6 +313,7 @@ class MainActivity : ComponentActivity() {
             if (pendingDeleteChat?.email.equals(item.email, true)) {
                 repo.deleteChat(item.email)
                 pendingDeleteChat = null
+                snackbarHostState.currentSnackbarData?.dismiss()
                 logger.info("Удаление диалога окончательно подтверждено: ${item.email}")
             }
         }
@@ -483,7 +484,10 @@ class MainActivity : ComponentActivity() {
                                                             }
                                                             pendingDeleteChat = chat
                                                             chats = chats.filterNot { it.email.equals(chat.email, true) }
-                                                            if (selected.equals(chat.email, true)) selected = null
+                                                            if (selected.equals(chat.email, true)) {
+                                                                selected = null
+                                                                repo.setLastChat(null)
+                                                            }
                                                             logger.info("Диалог удалён из списка, доступна отмена: ${chat.email}")
                                                             snackbarScope.launch {
                                                                 val result = snackbarHostState.showSnackbar(
@@ -553,12 +557,19 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(chat.messages.size) {
             if (chat.messages.isNotEmpty()) listState.animateScrollToItem(chat.messages.lastIndex)
         }
-        Column(modifier.fillMaxSize().imePadding().padding(10.dp)) {
+        Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
                 items(chat.messages) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
-                        Surface(color = if (message.incoming) Color(0xFF263746) else Color(0xFF185C45), shape = RoundedCornerShape(16.dp)) {
-                            Column(Modifier.widthIn(max = 300.dp).padding(10.dp)) {
+                        Surface(
+                            color = if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            shape = RoundedCornerShape(
+                                topStart = 18.dp, topEnd = 18.dp,
+                                bottomStart = if (message.incoming) 5.dp else 18.dp,
+                                bottomEnd = if (message.incoming) 18.dp else 5.dp
+                            )
+                        ) {
+                            Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
                                 if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
                                 Text(message.text)
                                 Text(
@@ -573,9 +584,30 @@ class MainActivity : ComponentActivity() {
                     Spacer(Modifier.height(7.dp))
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f), placeholder = { Text("Сообщение...") }, shape = RoundedCornerShape(24.dp), maxLines = 4)
-                IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft.trim()); draft = "" } }) { Icon(Icons.Default.Send, "Отправить", tint = Blue) }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF1A2A39),
+                shape = RoundedCornerShape(26.dp)
+            ) {
+                Row(Modifier.padding(start = 12.dp, end = 5.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Сообщение...") },
+                        shape = RoundedCornerShape(22.dp),
+                        maxLines = 4,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = Color.Transparent,
+                            focusedBorderColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            focusedContainerColor = Color.Transparent
+                        )
+                    )
+                    IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft.trim()); draft = "" } }, enabled = draft.isNotBlank()) {
+                        Icon(Icons.Default.Send, "Отправить", tint = if (draft.isNotBlank()) Blue else Color.Gray)
+                    }
+                }
             }
         }
     }
