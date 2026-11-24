@@ -42,7 +42,12 @@ jobs:
       - name: Build APK
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
-        run: gradle assembleDebug
+        run: |
+          MC_KEYSTORE_PATH="$HOME/.android/debug.keystore" \
+          KEYSTORE_PASSWORD=android \
+          KEY_ALIAS=androiddebugkey \
+          KEY_PASSWORD=android \
+          gradle assembleDebug
 
       - name: Verify APK signature and upgrade identity
         run: |
