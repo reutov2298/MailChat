@@ -222,6 +222,12 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
+                    if (repo.isChatDeleted(parsed.sender)) {
+                        repo.markProcessed(mail.id)
+                        skipped++
+                        logger.info("Письмо пропущено: чат ранее удалён пользователем: ${parsed.sender}")
+                        continue
+                    }
 
                     if (mail.spam) {
                         withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
@@ -261,6 +267,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 chats = repo.chats()
+                logger.info("Синхронизация завершена пакетно: 1 запрос списка + 1 batch-запрос содержимого, независимо от числа чатов")
                 if (accepted > 0) playIncomingSound()
                 logger.add("Проверка Gmail завершена. Получено: $accepted; пропущено: $skipped; всего проверено: ${incoming.size}")
                 result = "Проверка завершена. Новых сообщений: $accepted"
@@ -313,6 +320,7 @@ class MainActivity : ComponentActivity() {
             delay(5000)
             if (pendingDeleteChat?.email == item.email) {
                 repo.deleteChat(item.email)
+                chats = chats.filterNot { it.email.equals(item.email, true) }
                 pendingDeleteChat = null
                 snackbarHostState.currentSnackbarData?.dismiss()
                 logger.info("Удаление диалога окончательно подтверждено: ${item.email}")
@@ -481,10 +489,10 @@ class MainActivity : ComponentActivity() {
                                                         if (drag < -100f) {
                                                             pendingDeleteChat?.let { previous ->
                                                                 repo.deleteChat(previous.email)
+                                                                chats = chats.filterNot { it.email.equals(previous.email, true) }
                                                                 snackbarHostState.currentSnackbarData?.dismiss()
                                                             }
                                                             pendingDeleteChat = chat
-                                                            repo.deleteChat(chat.email)
                                                             chats = chats.filterNot { it.email.equals(chat.email, true) }
                                                             if (selected.equals(chat.email, true)) {
                                                                 selected = null
@@ -499,8 +507,7 @@ class MainActivity : ComponentActivity() {
                                                                 if (result == SnackbarResult.ActionPerformed) {
                                                                     val deleted = pendingDeleteChat
                                                                     if (deleted != null) {
-                                                                        chats = (chats + deleted).distinctBy { it.email }.sortedBy { it.title.lowercase()}
-                                                                        repo.save(chats)
+                                                                        chats = (chats + deleted).distinctBy { it.email }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
                                                                         pendingDeleteChat = null
                                                                         logger.info("Удаление диалога отменено: ${deleted.email}")
                                                                     }
@@ -556,8 +563,9 @@ class MainActivity : ComponentActivity() {
     @Composable private fun Conversation(chat: McChat, modifier: Modifier, onSend: (String) -> Unit) {
         var draft by remember { mutableStateOf("") }
         val listState = rememberLazyListState()
+        val wasAtBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
         LaunchedEffect(chat.messages.size) {
-            if (chat.messages.isNotEmpty()) listState.animateScrollToItem(chat.messages.lastIndex)
+            if (chat.messages.isNotEmpty() && wasAtBottom) listState.animateScrollToItem(chat.messages.lastIndex)
         }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
