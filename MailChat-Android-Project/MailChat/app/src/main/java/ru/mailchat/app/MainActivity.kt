@@ -731,13 +731,13 @@ class MainActivity : ComponentActivity() {
                                         Spacer(Modifier.width(4.dp))
                                         val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
                                         when (message.state) {
-                                            DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
-                                            DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                            DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                            DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                             DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
-                                                Text("✓", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
-                                                Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                                Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                             }
-                                            DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 8.sp, lineHeight = 9.sp)
+                                            DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                         }
                                     }
                                 }
