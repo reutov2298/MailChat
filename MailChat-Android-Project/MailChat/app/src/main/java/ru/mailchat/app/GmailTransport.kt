@@ -109,7 +109,7 @@ class GmailTransport {
             }
             append("--").append(boundary).append("--\r\n")
         }
-        val response = request("https://gmail.googleapis.com/batch/gmail/v1", token, "POST", batchBody, "multipart/mixed; boundary=$boundary")
+        val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", batchBody, "multipart/mixed; boundary=$boundary")
         val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Gmail batch response has no boundary")
         val result = mutableListOf<RemoteMessage>()
