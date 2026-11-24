@@ -8,6 +8,35 @@ class McRepository(context: Context) {
     companion object { private val syncLock = Any() }
     private val prefs = context.getSharedPreferences("mc_local", Context.MODE_PRIVATE)
 
+    init { prefs.edit().remove("deleted_chats").apply() }
+
+    fun pendingChatDeletions(): Map<String, Long> {
+        val json = try { JSONObject(prefs.getString("pending_chat_deletions", "{}")) } catch (_: Exception) { JSONObject() }
+        return json.keys().asSequence().mapNotNull { email -> json.optLong(email, 0L).takeIf { it > 0L }?.let { email to it } }.toMap()
+    }
+
+    private fun savePendingChatDeletions(items: Map<String, Long>) {
+        val json = JSONObject()
+        items.forEach { (email, deadline) -> json.put(email, deadline) }
+        prefs.edit().putString("pending_chat_deletions", json.toString()).apply()
+    }
+
+    fun scheduleChatDeletion(email: String, deadline: Long) {
+        val pending = pendingChatDeletions().toMutableMap()
+        pending[email.trim().lowercase()] = deadline
+        savePendingChatDeletions(pending)
+    }
+
+    fun cancelChatDeletion(email: String) {
+        val pending = pendingChatDeletions().toMutableMap()
+        pending.remove(email.trim().lowercase())
+        savePendingChatDeletions(pending)
+    }
+
+    fun finalizeExpiredChatDeletions(now: Long = System.currentTimeMillis()) {
+        pendingChatDeletions().filterValues { it <= now }.keys.toList().forEach { deleteChat(it) }
+    }
+
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
@@ -47,9 +76,6 @@ class McRepository(context: Context) {
         prefs.edit().putStringSet("processed", set).apply()
     }
 
-    fun isChatDeleted(email: String): Boolean =
-        prefs.getStringSet("deleted_chats", emptySet())?.contains(email.trim().lowercase()) == true
-
     fun restoreChat(email: String) {
         val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.remove(email.trim().lowercase())
@@ -84,13 +110,12 @@ class McRepository(context: Context) {
                 else -> email
             }
             McChat(email, displayTitle, parsed, manuallyNamed, senderName)
-        }.filterNot { isChatDeleted(it.email) }
-            .sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
+        }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
 
     fun save(chats: List<McChat>) {
         val root = JSONArray()
-        chats.filterNot { isChatDeleted(it.email) }.forEach { c ->
+        chats.forEach { c ->
             val messages = JSONArray()
             c.messages.forEach { m ->
                 messages.put(
@@ -113,26 +138,8 @@ class McRepository(context: Context) {
 
     fun deleteChat(email: String) {
         val normalized = email.trim().lowercase()
-        val deleted = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
-        deleted.add(normalized)
-        val remaining = chats().filterNot { it.email.equals(normalized, true) }
-        val root = JSONArray()
-        remaining.forEach { c ->
-            val messages = JSONArray()
-            c.messages.forEach { m ->
-                messages.put(
-                    JSONObject()
-                        .put("id", m.id).put("sender", m.sender).put("recipient", m.recipient)
-                        .put("text", m.text).put("timestamp", m.timestamp).put("incoming", m.incoming)
-                        .put("state", m.state.name).put("spam", m.recoveredFromSpam)
-                )
-            }
-            root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("messages", messages))
-        }
-        prefs.edit()
-            .putString("chats", root.toString())
-            .putStringSet("deleted_chats", deleted)
-            .apply()
+        save(chats().filterNot { it.email.equals(normalized, true) })
+        cancelChatDeletion(normalized)
         if (lastChat().equals(normalized, true)) setLastChat(null)
     }
 }

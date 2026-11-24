@@ -64,12 +64,6 @@ class McSyncWorker(
                     continue
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
-                if (repo.isChatDeleted(parsed.sender)) {
-                    repo.markProcessed(mail.id)
-                    logger.info("Фоновое письмо пропущено: чат удалён пользователем: ${parsed.sender}")
-                    continue
-                }
-
                 if (chats.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
                     repo.markProcessed(mail.id)
                     continue
@@ -92,9 +86,9 @@ class McSyncWorker(
                 )
                 val index = chats.indexOfFirst { it.email.equals(parsed.sender, true) }
                 if (index >= 0) {
-                    chats[index] = chats[index].copy(messages = chats[index].messages + message)
+                    chats[index] = chats[index].copy(title = if (!chats[index].nameManuallySet && mail.senderName.isNotBlank()) mail.senderName else chats[index].title, senderName = mail.senderName.takeIf { it.isNotBlank() } ?: chats[index].senderName, messages = chats[index].messages + message)
                 } else {
-                    chats.add(McChat(parsed.sender, messages = listOf(message)))
+                    chats.add(McChat(parsed.sender, title = mail.senderName.ifBlank { parsed.sender }, messages = listOf(message), senderName = mail.senderName.takeIf { it.isNotBlank() }))
                 }
                 repo.save(chats)
                 repo.markProcessed(mail.id)

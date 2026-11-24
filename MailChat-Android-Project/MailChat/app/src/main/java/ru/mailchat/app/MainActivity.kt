@@ -36,11 +36,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Velocity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,6 +58,7 @@ import java.security.Security
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.ceil
 
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
@@ -83,6 +90,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102)
         }
+        repo.finalizeExpiredChatDeletions()
         chats = repo.chats()
         logger.add("Приложение запущено. Восстановлено чатов: ${chats.size}")
         if (!handleAuthIntent(intent) && auth.isConnected()) refreshToken()
@@ -233,13 +241,6 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
-                    if (repo.isChatDeleted(parsed.sender)) {
-                        repo.markProcessed(mail.id)
-                        skipped++
-                        logger.info("Письмо пропущено: чат ранее удалён пользователем: ${parsed.sender}")
-                        continue
-                    }
-
                     if (mail.spam) {
                         withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
                         logger.info("Подтверждённое сообщение MC возвращено из спама")
@@ -318,10 +319,9 @@ class MainActivity : ComponentActivity() {
         var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
         var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
-        var pendingDeleteChat by remember { mutableStateOf<McChat?>(null) }
+        val pendingDeleteDeadlines = remember { mutableStateMapOf<String, Long>().apply { putAll(repo.pendingChatDeletions()) } }
+        var deleteCountdownNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val logListState = rememberLazyListState()
-        val snackbarHostState = remember { SnackbarHostState() }
-        val snackbarScope = rememberCoroutineScope()
         val logLines = remember(logText) { logText.lineSequence().filter { it.isNotBlank() }.toList() }
         val selectedChat = chats.firstOrNull { selected != null && it.email.equals(selected, true) }
 
@@ -336,15 +336,17 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(logs, logLines.size) {
             if (logs && logLines.isNotEmpty()) logListState.scrollToItem(logLines.lastIndex)
         }
-        LaunchedEffect(pendingDeleteChat) {
-            val item = pendingDeleteChat ?: return@LaunchedEffect
-            delay(5000)
-            if (pendingDeleteChat?.email == item.email) {
-                repo.deleteChat(item.email)
-                chats = chats.filterNot { it.email.equals(item.email, true) }
-                pendingDeleteChat = null
-                snackbarHostState.currentSnackbarData?.dismiss()
-                logger.info("Удаление диалога окончательно подтверждено: ${item.email}")
+        LaunchedEffect(Unit) {
+            while (true) {
+                deleteCountdownNow = System.currentTimeMillis()
+                val expired = pendingDeleteDeadlines.filterValues { it <= deleteCountdownNow }.keys.toList()
+                expired.forEach { email ->
+                    repo.deleteChat(email)
+                    pendingDeleteDeadlines.remove(email)
+                    chats = repo.chats()
+                    logger.info("Удаление диалога окончательно подтверждено: $email")
+                }
+                delay(100)
             }
         }
         val applySyncSettings = {
@@ -368,7 +370,28 @@ class MainActivity : ComponentActivity() {
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(
-                snackbarHost = { SnackbarHost(snackbarHostState) },
+                bottomBar = {
+                    val deletions = pendingDeleteDeadlines.entries.sortedBy { it.value }
+                    if (deletions.isNotEmpty()) Surface(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(18.dp), tonalElevation = 4.dp, shadowElevation = 6.dp
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+                            deletions.forEach { deletion ->
+                                val secondsLeft = ceil(((deletion.value - deleteCountdownNow).coerceAtLeast(0L)) / 1000.0).toInt()
+                                if (secondsLeft > 0) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("Удаление ${deletion.key} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                    TextButton(onClick = {
+                                        repo.cancelChatDeletion(deletion.key)
+                                        pendingDeleteDeadlines.remove(deletion.key)
+                                        logger.info("Удаление диалога отменено: ${deletion.key}")
+                                    }) { Text("Отмена") }
+                                }
+                            }
+                        }
+                    }
+                },
                 topBar = {
                 TopAppBar(title = {
                     Column {
@@ -499,7 +522,7 @@ class MainActivity : ComponentActivity() {
                     selected != null -> {
                         val email = selected!!
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
-                        Conversation(chat, Modifier.padding(padding), onSend = { body ->
+                        Conversation(chat, Modifier.padding(padding), isSyncing = syncInProgress, onRefresh = { syncNow(source = "жест обновления переписки") }, onSend = { body ->
                             val outgoing = McMessage(chatId = email.lowercase(), sender = accountEmail, recipient = email, text = body, incoming = false, state = DeliveryState.QUEUED)
                             chats = (chats.filterNot { it.email.equals(email, true) } + chat.copy(messages = chat.messages + outgoing)).sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
                             repo.save(chats)
@@ -516,46 +539,54 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.height(12.dp))
                             Button(onClick = { settings = true }) { Text("Подключить Gmail") }
                         } else {
-                            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
-                                items(chats.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
+                            val chatListState = rememberLazyListState()
+                            var bottomPullDistance by remember { mutableFloatStateOf(0f) }
+                            val density = LocalDensity.current
+                            val bottomRefreshConnection = remember(chatListState) {
+                                object : NestedScrollConnection {
+                                    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                                        if (!chatListState.canScrollForward && available.y > 0f) bottomPullDistance = (bottomPullDistance + available.y).coerceAtMost(with(density) { 120.dp.toPx() })
+                                        else if (available.y != 0f) bottomPullDistance = 0f
+                                        return Offset.Zero
+                                    }
+                                    override suspend fun onPreFling(available: Velocity): Velocity {
+                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollForward) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
+                                        else bottomPullDistance = 0f
+                                        return Velocity.Zero
+                                    }
+                                }
+                            }
+                            Column(Modifier.fillMaxSize()) {
+                                if (syncInProgress || bottomPullDistance > 0f) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                    if (syncInProgress) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    else Text("Потяните вниз для проверки новых сообщений", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    if (syncInProgress) Spacer(Modifier.width(8.dp))
+                                    if (syncInProgress) Text("Проверяем почту...", fontSize = 12.sp)
+                                }
+                                LazyColumn(state = chatListState, modifier = Modifier.weight(1f).nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
+                                    val dragOffset = remember(chat.email) { mutableFloatStateOf(0f) }
                                     Card(
                                         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
+                                            .graphicsLayer {
+                                                translationX = dragOffset.floatValue
+                                                val threshold = size.width * 0.30f
+                                                alpha = if (threshold > 0f) 1f - (kotlin.math.abs(dragOffset.floatValue) / threshold).coerceIn(0f, 1f) else 1f
+                                            }
                                             .pointerInput(chat.email) {
-                                                var drag = 0f
                                                 detectHorizontalDragGestures(
-                                                    onHorizontalDrag = { change, amount -> drag += amount; change.consume() },
+                                                    onHorizontalDrag = { change, amount -> dragOffset.floatValue = (dragOffset.floatValue + amount).coerceAtMost(0f); change.consume() },
                                                     onDragEnd = {
-                                                        if (drag < -100f) {
-                                                            pendingDeleteChat?.let { previous ->
-                                                                repo.deleteChat(previous.email)
-                                                                chats = chats.filterNot { it.email.equals(previous.email, true) }
-                                                                snackbarHostState.currentSnackbarData?.dismiss()
-                                                            }
-                                                            pendingDeleteChat = chat
-                                                            chats = chats.filterNot { it.email.equals(chat.email, true) }
-                                                            if (selected.equals(chat.email, true)) {
-                                                                selected = null
-                                                                repo.setLastChat(null)
-                                                            }
-                                                            logger.info("Диалог удалён из списка, доступна отмена: ${chat.email}")
-                                                            snackbarScope.launch {
-                                                                val result = snackbarHostState.showSnackbar(
-                                                                    message = "Диалог удалён — отмена в течение 5 секунд", actionLabel = "Отмена",
-                                                                    withDismissAction = true, duration = SnackbarDuration.Indefinite
-                                                                )
-                                                                if (result == SnackbarResult.ActionPerformed) {
-                                                                    val deleted = pendingDeleteChat
-                                                                    if (deleted != null) {
-                                                                        chats = (chats + deleted).distinctBy { it.email }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
-                                                                        pendingDeleteChat = null
-                                                                        logger.info("Удаление диалога отменено: ${deleted.email}")
-                                                                    }
-                                                                }
-                                                            }
+                                                        val threshold = size.width * 0.30f
+                                                        if (threshold > 0f && dragOffset.floatValue <= -threshold) {
+                                                            val deadline = System.currentTimeMillis() + 5000L
+                                                            repo.scheduleChatDeletion(chat.email, deadline)
+                                                            pendingDeleteDeadlines[chat.email] = deadline
+                                                            logger.info("Диалог скрыт на 5 секунд; доступна отмена: ${chat.email}")
                                                         }
-                                                        drag = 0f
+                                                        dragOffset.floatValue = 0f
                                                     },
-                                                    onDragCancel = { drag = 0f }
+                                                    onDragCancel = { dragOffset.floatValue = 0f }
                                                 )
                                             }
                                             .clickable { selected = chat.email; repo.setLastChat(chat.email) },
@@ -584,6 +615,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+            }
             }
             if (showNew) {
                 var email by remember { mutableStateOf("") }
@@ -645,23 +677,34 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun Conversation(chat: McChat, modifier: Modifier, onSend: (String) -> Unit) {
+    @Composable private fun Conversation(chat: McChat, modifier: Modifier, isSyncing: Boolean, onRefresh: () -> Unit, onSend: (String) -> Unit) {
         var draft by remember { mutableStateOf("") }
         val listState = rememberLazyListState()
-        val wasAtBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
-        val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
-        LaunchedEffect(chat.email) {
-            if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex)
+        var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
+        val density = LocalDensity.current
+        val topRefreshConnection = remember(listState, onRefresh) {
+            object : NestedScrollConnection {
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    if (!listState.canScrollBackward && available.y < 0f) topPullDistance = (topPullDistance - available.y).coerceAtMost(with(density) { 120.dp.toPx() })
+                    else if (available.y != 0f) topPullDistance = 0f
+                    return Offset.Zero
+                }
+                override suspend fun onPreFling(available: Velocity): Velocity {
+                    if (topPullDistance >= with(density) { 72.dp.toPx() } && !listState.canScrollBackward) { topPullDistance = 0f; onRefresh() }
+                    else topPullDistance = 0f
+                    return Velocity.Zero
+                }
+            }
         }
-        LaunchedEffect(chat.messages.size) {
-            val last = chat.messages.lastOrNull()
-            if (last != null && (!last.incoming || wasAtBottom)) listState.animateScrollToItem(chat.messages.lastIndex)
-        }
-        LaunchedEffect(imeBottom) {
-            if (chat.messages.isNotEmpty() && wasAtBottom) listState.scrollToItem(chat.messages.lastIndex)
-        }
+        LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(0) }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (isSyncing || topPullDistance > 0f) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                if (isSyncing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text("Потяните вверх для проверки новых сообщений", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (isSyncing) Spacer(Modifier.width(8.dp))
+                if (isSyncing) Text("Проверяем почту...", fontSize = 12.sp)
+            }
+            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(topRefreshConnection)) {
                 items(chat.messages, key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
