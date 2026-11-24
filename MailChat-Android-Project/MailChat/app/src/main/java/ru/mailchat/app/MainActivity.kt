@@ -292,6 +292,8 @@ class MainActivity : ComponentActivity() {
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
         var pendingDeleteChat by remember { mutableStateOf<McChat?>(null) }
         val logListState = rememberLazyListState()
+        val snackbarHostState = remember { SnackbarHostState() }
+        val snackbarScope = rememberCoroutineScope()
         val logLines = remember(logText) { logText.lineSequence().filter { it.isNotBlank() }.toList() }
 
         LaunchedEffect(logs) {
@@ -465,25 +467,65 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.height(12.dp))
                             Button(onClick = { settings = true }) { Text("Подключить Gmail") }
                         } else {
-                            LazyColumn(Modifier.fillMaxSize()) {
-                                items(chats) { chat ->
-                                    Row(Modifier.fillMaxWidth().pointerInput(chat.email) {
-                                    var drag = 0f
-                                    detectHorizontalDragGestures(
-                                        onHorizontalDrag = { change, amount -> drag += amount; change.consume() },
-                                        onDragEnd = { if (drag < -100f) pendingDeleteChat = chat.email; drag = 0f },
-                                        onDragCancel = { drag = 0f }
-                                    )
-                                }.clickable { selected = chat.email; repo.setLastChat(chat.email) }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(48.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) { Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp) }
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(chat.title, fontWeight = FontWeight.SemiBold)
-                                            Text(chat.messages.lastOrNull()?.text ?: chat.email, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, fontSize = 13.sp)
+                            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+                                items(chats, key = { it.email }) { chat ->
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
+                                            .pointerInput(chat.email) {
+                                                var drag = 0f
+                                                detectHorizontalDragGestures(
+                                                    onHorizontalDrag = { change, amount -> drag += amount; change.consume() },
+                                                    onDragEnd = {
+                                                        if (drag < -100f) {
+                                                            pendingDeleteChat?.let { previous ->
+                                                                repo.deleteChat(previous.email)
+                                                                snackbarHostState.currentSnackbarData?.dismiss()
+                                                            }
+                                                            pendingDeleteChat = chat
+                                                            chats = chats.filterNot { it.email.equals(chat.email, true) }
+                                                            if (selected.equals(chat.email, true)) selected = null
+                                                            logger.info("Диалог удалён из списка, доступна отмена: ${chat.email}")
+                                                            snackbarScope.launch {
+                                                                val result = snackbarHostState.showSnackbar(
+                                                                    message = "Диалог удалён", actionLabel = "Отмена",
+                                                                    withDismissAction = true, duration = SnackbarDuration.Indefinite
+                                                                )
+                                                                if (result == SnackbarResult.ActionPerformed) {
+                                                                    val deleted = pendingDeleteChat
+                                                                    if (deleted != null) {
+                                                                        chats = (chats + deleted).distinctBy { it.email }.sortedBy { it.title.lowercase()}
+                                                                        repo.save(chats)
+                                                                        pendingDeleteChat = null
+                                                                        logger.info("Удаление диалога отменено: ${deleted.email}")
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        drag = 0f
+                                                    },
+                                                    onDragCancel = { drag = 0f }
+                                                )
+                                            }
+                                            .clickable { selected = chat.email; repo.setLastChat(chat.email) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        colors = CardDefaults.cardColors(containerColor = Color(0xFF192B3B)),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                                    ) {
+                                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
+                                                Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                                            }
+                                            Spacer(Modifier.width(13.dp))
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9))
+                                                Text(chat.messages.lastOrNull()?.text ?: chat.email, color = Color(0xFF9EADBC), maxLines = 1, fontSize = 13.sp)
+                                            }
+                                            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                                Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
+                                                Text(chat.messages.lastOrNull()?.let { when (it.state) { DeliveryState.QUEUED -> "◷"; DeliveryState.SENT_TO_GMAIL -> "✓"; DeliveryState.DELIVERED -> "✓✓"; DeliveryState.FAILED -> "!" } } ?: "", color = if (chat.messages.lastOrNull()?.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B), fontSize = 14.sp)
+                                            }
                                         }
-                                        Text(chat.messages.lastOrNull()?.let { when (it.state) { DeliveryState.QUEUED -> "◷"; DeliveryState.SENT_TO_GMAIL -> "✓"; DeliveryState.DELIVERED -> "✓✓"; DeliveryState.FAILED -> "!" } } ?: "", color = Blue)
                                     }
-                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = .3f))
                                 }
                             }
                         }
@@ -501,15 +543,6 @@ class MainActivity : ComponentActivity() {
                 }, confirmButton = { TextButton(onClick = {
                     if (email.contains("@")) { val normalized = email.trim().lowercase(); val title = displayName.trim().ifBlank { normalized.substringBefore("@") }; if (chats.none { it.email.equals(normalized, true) }) { chats = chats + McChat(normalized, title); repo.save(chats) } else { chats = chats.map { if (it.email.equals(normalized, true)) it.copy(title = title) else it }; repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
                 }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
-            }
-            pendingDeleteChat?.let { email ->
-                AlertDialog(
-                    onDismissRequest = { pendingDeleteChat = null },
-                    title = { Text("Удалить чат?") },
-                    text = { Text("Переписка с $email будет удалена с этого устройства.") },
-                    confirmButton = { TextButton(onClick = { repo.deleteChat(email); chats = repo.chats(); if (selected.equals(email, true)) selected = null; pendingDeleteChat = null }) { Text("Удалить") } },
-                    dismissButton = { TextButton(onClick = { pendingDeleteChat = null }) { Text("Отмена") } }
-                )
             }
         }
     }
