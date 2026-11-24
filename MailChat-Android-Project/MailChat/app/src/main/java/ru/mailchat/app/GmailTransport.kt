@@ -12,12 +12,14 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class GmailTransport {
+    var onRequestStarted: (() -> Unit)? = null
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>)
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null): String {
+        onRequestStarted?.invoke()
         val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
         when (method) {
             "POST" -> builder.post((body ?: "").toRequestBody("application/json; charset=utf-8".toMediaType()))
