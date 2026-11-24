@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
                 loadProfileAndSetBaseline()
             } else if (error != null) {
                 errorText = error
-                logger.add("Ошибка OAuth: $errorText")
+                logger.error("Ошибка OAuth: $errorText")
                 authChanged++
             }
         }
@@ -119,7 +119,7 @@ class MainActivity : ComponentActivity() {
                 token = null
                 accountEmail = ""
                 errorText = error.orEmpty()
-                logger.add("Не удалось восстановить авторизацию: ${errorText.take(200)}")
+                logger.error("Не удалось восстановить авторизацию: ${errorText.take(200)}")
                 authChanged++
             }
         }
@@ -142,7 +142,7 @@ class MainActivity : ComponentActivity() {
                 syncNow(source = "после авторизации")
             } catch (e: Exception) {
                 errorText = e.message ?: "Ошибка Gmail API"
-                logger.add("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
+                logger.error("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
                 token = null
                 accountEmail = ""
                 authChanged++
@@ -162,7 +162,7 @@ class MainActivity : ComponentActivity() {
                 logger.add("Сообщение отправлено в Gmail: $id")
                 done(null)
             } catch (e: Exception) {
-                logger.add("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
+                logger.error("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
                 done(e.message ?: "Ошибка отправки")
             }
         }
@@ -310,7 +310,7 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(pendingDeleteChat) {
             val item = pendingDeleteChat ?: return@LaunchedEffect
             delay(5000)
-            if (pendingDeleteChat?.email.equals(item.email, true)) {
+            if (pendingDeleteChat?.email == item.email) {
                 repo.deleteChat(item.email)
                 pendingDeleteChat = null
                 snackbarHostState.currentSnackbarData?.dismiss()
