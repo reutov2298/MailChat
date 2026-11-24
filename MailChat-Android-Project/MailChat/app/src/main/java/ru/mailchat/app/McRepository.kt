@@ -71,7 +71,19 @@ class McRepository(context: Context) {
                     m.optBoolean("spam")
                 )
             }
-            McChat(j.optString("email"), j.optString("title"), parsed)
+            val email = j.optString("email")
+            val storedTitle = j.optString("title", email.substringBefore('@'))
+            val manuallyNamed = j.optBoolean("nameManuallySet",
+                storedTitle.isNotBlank() &&
+                    !storedTitle.equals(email.substringBefore('@'), true) &&
+                    !storedTitle.equals(email, true))
+            val senderName = j.optString("senderName").takeIf { it.isNotBlank() }
+            val displayTitle = when {
+                manuallyNamed -> storedTitle
+                senderName != null -> senderName
+                else -> email
+            }
+            McChat(email, displayTitle, parsed, manuallyNamed, senderName)
         }.filterNot { isChatDeleted(it.email) }
             .sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
@@ -88,7 +100,7 @@ class McRepository(context: Context) {
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                 )
             }
-            root.put(JSONObject().put("email", c.email).put("title", c.title).put("messages", messages))
+            root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("messages", messages))
         }
         prefs.edit().putString("chats", root.toString()).apply()
     }
@@ -115,7 +127,7 @@ class McRepository(context: Context) {
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                 )
             }
-            root.put(JSONObject().put("email", c.email).put("title", c.title).put("messages", messages))
+            root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("messages", messages))
         }
         prefs.edit()
             .putString("chats", root.toString())

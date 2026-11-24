@@ -26,7 +26,7 @@ class GmailTransport {
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
-    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>)
+    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String =
         synchronized(requestMonitor) {
@@ -132,11 +132,48 @@ class GmailTransport {
             val labels = j.optJSONArray("labelIds")
             val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
             result += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
-                extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap)
+                extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap,
+                parseSenderDisplayName(from))
         }
         onDiagnostic?.invoke("Gmail batch: запрошено писем=${messageIds.size}, получено=${result.size}")
         if (result.size != messageIds.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
         return result
+    }
+
+
+    private fun parseSenderDisplayName(from: String): String {
+        val angle = from.indexOf('<')
+        if (angle <= 0) return ""
+        val raw = from.substring(0, angle).trim().trim('"', '\'')
+        if (raw.isBlank()) return ""
+        return decodeEncodedWords(raw).trim().trim('"', '\'')
+    }
+
+    private fun decodeEncodedWords(value: String): String {
+        val pattern = Regex("=\\?([^?]+)\\?([bBqQ])\\?([^?]+)\\?=")
+        return pattern.replace(value) { match ->
+            runCatching {
+                val charset = java.nio.charset.Charset.forName(match.groupValues[1])
+                val payload = match.groupValues[3]
+                val bytes = if (match.groupValues[2].equals("B", true)) {
+                    Base64.decode(payload, Base64.DEFAULT)
+                } else {
+                    val output = java.io.ByteArrayOutputStream()
+                    var i = 0
+                    while (i < payload.length) {
+                        when {
+                            payload[i] == '_' -> { output.write(32); i++ }
+                            payload[i] == '=' && i + 2 < payload.length -> {
+                                output.write(payload.substring(i + 1, i + 3).toInt(16)); i += 3
+                            }
+                            else -> { output.write(payload[i].toString().toByteArray(StandardCharsets.ISO_8859_1)); i++ }
+                        }
+                    }
+                    output.toByteArray()
+                }
+                String(bytes, charset)
+            }.getOrDefault(match.value)
+        }
     }
 
     private fun extractBody(payload: JSONObject?): String {

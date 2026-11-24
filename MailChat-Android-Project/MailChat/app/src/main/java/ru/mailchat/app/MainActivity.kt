@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -35,6 +36,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,6 +66,7 @@ class MainActivity : ComponentActivity() {
     private var accountEmail: String = ""
     private var errorText by mutableStateOf("")
     private var authChanged by mutableIntStateOf(0)
+    private var authResolving by mutableStateOf(false)
     private var chats by mutableStateOf<List<McChat>>(emptyList())
     private var syncInProgress by mutableStateOf(false)
     private var appForeground = true
@@ -94,7 +97,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleAuthIntent(intent: Intent): Boolean {
-        return auth.handle(intent) { access, error ->
+        authResolving = true
+        val handled = auth.handle(intent) { access, error ->
             if (access != null) {
                 token = access
                 logger.add("Авторизация Google выполнена")
@@ -103,12 +107,16 @@ class MainActivity : ComponentActivity() {
             } else if (error != null) {
                 errorText = error
                 logger.error("Ошибка OAuth: $errorText")
+                authResolving = false
                 authChanged++
             }
         }
+        if (!handled) authResolving = false
+        return handled
     }
 
     private fun refreshToken() {
+        authResolving = true
         auth.accessToken { access, error ->
             if (access != null) {
                 token = access
@@ -118,6 +126,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 token = null
                 accountEmail = ""
+                authResolving = false
                 errorText = error.orEmpty()
                 logger.error("Не удалось восстановить авторизацию: ${errorText.take(200)}")
                 authChanged++
@@ -133,6 +142,7 @@ class MainActivity : ComponentActivity() {
                 val profile = withContext(Dispatchers.IO) { gmail.profile(t) }
                 accountEmail = profile.email
                 repo.setEmail(profile.email)
+                authResolving = false
                 if (repo.baseline() == 0L) {
                     repo.setBaseline(System.currentTimeMillis() / 1000)
                     logger.add("Первичная точка синхронизации сохранена; старые письма не импортируются")
@@ -145,6 +155,7 @@ class MainActivity : ComponentActivity() {
                 logger.error("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
                 token = null
                 accountEmail = ""
+                authResolving = false
                 authChanged++
             }
         }
@@ -254,10 +265,17 @@ class MainActivity : ComponentActivity() {
                         recoveredFromSpam = mail.spam
                     )
 
+                    val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
                     if (index >= 0) {
-                        current[index] = current[index].copy(messages = current[index].messages + message)
+                        val existing = current[index]
+                        current[index] = existing.copy(
+                            title = if (!existing.nameManuallySet && incomingName != null) incomingName else existing.title,
+                            senderName = incomingName ?: existing.senderName,
+                            messages = existing.messages + message
+                        )
                     } else {
-                        current.add(McChat(parsed.sender, messages = listOf(message)))
+                        current.add(McChat(parsed.sender, title = incomingName ?: parsed.sender,
+                            messages = listOf(message), senderName = incomingName))
                     }
 
                     repo.save(current)
@@ -291,6 +309,8 @@ class MainActivity : ComponentActivity() {
         var settings by remember { mutableStateOf(false) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
+        var editContactProfile by remember { mutableStateOf(false) }
+        var contactName by remember { mutableStateOf("") }
         var status by remember { mutableStateOf("") }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
@@ -303,6 +323,7 @@ class MainActivity : ComponentActivity() {
         val snackbarHostState = remember { SnackbarHostState() }
         val snackbarScope = rememberCoroutineScope()
         val logLines = remember(logText) { logText.lineSequence().filter { it.isNotBlank() }.toList() }
+        val selectedChat = chats.firstOrNull { selected != null && it.email.equals(selected, true) }
 
         LaunchedEffect(logs) {
             while (logs) {
@@ -351,8 +372,15 @@ class MainActivity : ComponentActivity() {
                 topBar = {
                 TopAppBar(title = {
                     Column {
-                        Text(if (logs) "Логирование" else if (settings) "Настройки" else selected?.substringBefore('@') ?: "MC", fontWeight = FontWeight.Bold)
-                        Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            if (logs) "Логирование" else if (settings) "Настройки"
+                            else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
+                            fontWeight = FontWeight.Bold
+                        )
+                        val subtitle = if (selectedChat != null) {
+                            selectedChat.email.takeIf { !selectedChat.title.equals(selectedChat.email, true) }.orEmpty()
+                        } else if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail"
+                        if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }, navigationIcon = {
                     if (selected != null || settings || logs) IconButton(onClick = {
@@ -363,10 +391,21 @@ class MainActivity : ComponentActivity() {
                     if (!settings && !logs && selected == null) {
                         IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "Новый чат") }
                         IconButton(onClick = { settings = true }) { Icon(Icons.Default.Settings, "Настройки") }
+                    } else if (!settings && !logs && selectedChat != null) {
+                        IconButton(onClick = {
+                            contactName = if (selectedChat.nameManuallySet) selectedChat.title else selectedChat.senderName.orEmpty()
+                            editContactProfile = true
+                        }) { Icon(Icons.Default.Edit, "Профиль собеседника") }
                     }
                 }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Navy))
             }) { padding ->
                 when {
+                    authResolving -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CircularProgressIndicator()
+                            Text("Проверяем подключение к Gmail...")
+                        }
+                    }
                     logs -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         Text("Размер файла: ${logSize} байт", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(
@@ -530,8 +569,9 @@ class MainActivity : ComponentActivity() {
                                             }
                                             Spacer(Modifier.width(13.dp))
                                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9))
-                                                Text(chat.messages.lastOrNull()?.text ?: chat.email, color = Color(0xFF9EADBC), maxLines = 1, fontSize = 13.sp)
+                                                Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
+                                                if (!chat.title.equals(chat.email, true)) Text(chat.email, color = Color(0xFF9EADBC), maxLines = 1, fontSize = 11.sp)
+                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC), maxLines = 1, fontSize = 13.sp)
                                             }
                                             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
                                                 Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
@@ -554,9 +594,54 @@ class MainActivity : ComponentActivity() {
                         OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
                     }
                 }, confirmButton = { TextButton(onClick = {
-                    if (email.contains("@")) { val normalized = email.trim().lowercase(); repo.restoreChat(normalized); val title = displayName.trim().ifBlank { normalized.substringBefore("@") }; if (chats.none { it.email.equals(normalized, true) }) { chats = chats + McChat(normalized, title); repo.save(chats) } else { chats = chats.map { if (it.email.equals(normalized, true)) it.copy(title = title) else it }; repo.save(chats) }; selected = normalized; repo.setLastChat(normalized); showNew = false }
+                    if (email.contains("@")) {
+                        val normalized = email.trim().lowercase()
+                        val manualName = displayName.trim()
+                        repo.restoreChat(normalized)
+                        val updated = if (chats.none { it.email.equals(normalized, true) }) {
+                            chats + McChat(normalized, title = manualName.ifBlank { normalized }, nameManuallySet = manualName.isNotBlank())
+                        } else chats.map { existing ->
+                            if (existing.email.equals(normalized, true)) existing.copy(
+                                title = manualName.ifBlank { existing.senderName ?: normalized },
+                                nameManuallySet = manualName.isNotBlank()
+                            ) else existing
+                        }
+                        chats = updated
+                        repo.save(updated)
+                        selected = normalized
+                        repo.setLastChat(normalized)
+                        showNew = false
+                    }
                 }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
             }
+        }
+        if (editContactProfile && selectedChat != null) {
+            AlertDialog(
+                onDismissRequest = { editContactProfile = false },
+                title = { Text("Профиль собеседника") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(selectedChat.email, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        OutlinedTextField(value = contactName, onValueChange = { contactName = it },
+                            label = { Text("Имя") }, singleLine = true)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val name = contactName.trim()
+                        val updated = chats.map { chat ->
+                            if (chat.email.equals(selectedChat.email, true)) {
+                                if (name.isBlank()) chat.copy(title = chat.senderName ?: chat.email, nameManuallySet = false)
+                                else chat.copy(title = name, nameManuallySet = true)
+                            } else chat
+                        }
+                        chats = updated
+                        repo.save(updated)
+                        editContactProfile = false
+                    }) { Text("Сохранить") }
+                },
+                dismissButton = { TextButton(onClick = { editContactProfile = false }) { Text("Отмена") } }
+            )
         }
     }
 
@@ -564,12 +649,20 @@ class MainActivity : ComponentActivity() {
         var draft by remember { mutableStateOf("") }
         val listState = rememberLazyListState()
         val wasAtBottom by remember { derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= listState.layoutInfo.totalItemsCount - 2 } ?: true } }
+        val imeBottom = WindowInsets.ime.getBottom(LocalDensity.current)
+        LaunchedEffect(chat.email) {
+            if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex)
+        }
         LaunchedEffect(chat.messages.size) {
-            if (chat.messages.isNotEmpty() && wasAtBottom) listState.animateScrollToItem(chat.messages.lastIndex)
+            val last = chat.messages.lastOrNull()
+            if (last != null && (!last.incoming || wasAtBottom)) listState.animateScrollToItem(chat.messages.lastIndex)
+        }
+        LaunchedEffect(imeBottom) {
+            if (chat.messages.isNotEmpty() && wasAtBottom) listState.scrollToItem(chat.messages.lastIndex)
         }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth()) {
-                items(chat.messages) { message ->
+                items(chat.messages, key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             color = if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),

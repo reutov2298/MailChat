@@ -16,4 +16,10 @@ data class McMessage(
     val recoveredFromSpam: Boolean = false
 )
 
-data class McChat(val email: String, val title: String = email.substringBefore('@'), val messages: List<McMessage> = emptyList())
+data class McChat(
+    val email: String,
+    val title: String = email,
+    val messages: List<McMessage> = emptyList(),
+    val nameManuallySet: Boolean = false,
+    val senderName: String? = null
+)
