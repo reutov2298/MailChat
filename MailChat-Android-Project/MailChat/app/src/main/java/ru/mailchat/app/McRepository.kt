@@ -37,7 +37,16 @@ class McRepository(context: Context) {
     }
     fun isProcessed(id: String): Boolean = prefs.getStringSet("processed", emptySet())?.contains(id) == true
     fun markProcessed(id: String) { val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf(); set.add(id); prefs.edit().putStringSet("processed", set).apply() }
-    fun isChatDeleted(email: String): Boolean = prefs.getStringSet("deleted_chats", emptySet())?.contains(email.trim().lowercase()) == true\n\n    fun restoreChat(email: String) {\n        val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()\n        set.remove(email.trim().lowercase())\n        prefs.edit().putStringSet("deleted_chats", set).apply()\n    }\n\n    fun chats(): List<McChat> {
+    fun isChatDeleted(email: String): Boolean =
+        prefs.getStringSet("deleted_chats", emptySet())?.contains(email.trim().lowercase()) == true
+
+    fun restoreChat(email: String) {
+        val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.remove(email.trim().lowercase())
+        prefs.edit().putStringSet("deleted_chats", set).apply()
+    }
+
+    fun chats(): List<McChat> {
         val root = try { JSONArray(prefs.getString("chats", "[]")) } catch (_: Exception) { JSONArray() }
         return (0 until root.length()).mapNotNull { i ->
             val j = root.optJSONObject(i) ?: return@mapNotNull null
