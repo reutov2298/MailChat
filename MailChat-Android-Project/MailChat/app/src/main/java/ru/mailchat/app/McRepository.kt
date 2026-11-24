@@ -7,6 +7,7 @@ import org.json.JSONObject
 class McRepository(context: Context) {
     companion object { private val syncLock = Any() }
     private val prefs = context.getSharedPreferences("mc_local", Context.MODE_PRIVATE)
+
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
@@ -27,6 +28,7 @@ class McRepository(context: Context) {
     fun releaseSyncLock() = synchronized(syncLock) {
         prefs.edit().putLong("sync_lock_until", 0L).apply()
     }
+
     fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean) {
         prefs.edit()
             .putInt("sync_open_seconds", open.coerceIn(5, 86400))
@@ -35,8 +37,16 @@ class McRepository(context: Context) {
             .putBoolean("sync_diagnostic_click", diagnosticClick)
             .apply()
     }
-    fun isProcessed(id: String): Boolean = prefs.getStringSet("processed", emptySet())?.contains(id) == true
-    fun markProcessed(id: String) { val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf(); set.add(id); prefs.edit().putStringSet("processed", set).apply() }
+
+    fun isProcessed(id: String): Boolean =
+        prefs.getStringSet("processed", emptySet())?.contains(id) == true
+
+    fun markProcessed(id: String) {
+        val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf()
+        set.add(id)
+        prefs.edit().putStringSet("processed", set).apply()
+    }
+
     fun isChatDeleted(email: String): Boolean =
         prefs.getStringSet("deleted_chats", emptySet())?.contains(email.trim().lowercase()) == true
 
@@ -53,20 +63,36 @@ class McRepository(context: Context) {
             val messages = j.optJSONArray("messages") ?: JSONArray()
             val parsed = (0 until messages.length()).mapNotNull { k ->
                 val m = messages.optJSONObject(k) ?: return@mapNotNull null
-                McMessage(m.optString("id"), j.optString("email"), m.optString("sender"), m.optString("recipient"), m.optString("text"), m.optLong("timestamp"), m.optBoolean("incoming"), runCatching { DeliveryState.valueOf(m.optString("state")) }.getOrDefault(DeliveryState.QUEUED), m.optBoolean("spam"))
+                McMessage(
+                    m.optString("id"), j.optString("email"), m.optString("sender"),
+                    m.optString("recipient"), m.optString("text"), m.optLong("timestamp"),
+                    m.optBoolean("incoming"),
+                    runCatching { DeliveryState.valueOf(m.optString("state")) }.getOrDefault(DeliveryState.QUEUED),
+                    m.optBoolean("spam")
+                )
             }
             McChat(j.optString("email"), j.optString("title"), parsed)
-        }
+        }.filterNot { isChatDeleted(it.email) }
+            .sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
+
     fun save(chats: List<McChat>) {
         val root = JSONArray()
-        chats.forEach { c ->
+        chats.filterNot { isChatDeleted(it.email) }.forEach { c ->
             val messages = JSONArray()
-            c.messages.forEach { m -> messages.put(JSONObject().put("id",m.id).put("sender",m.sender).put("recipient",m.recipient).put("text",m.text).put("timestamp",m.timestamp).put("incoming",m.incoming).put("state",m.state.name).put("spam",m.recoveredFromSpam)) }
-            root.put(JSONObject().put("email",c.email).put("title",c.title).put("messages",messages))
+            c.messages.forEach { m ->
+                messages.put(
+                    JSONObject()
+                        .put("id", m.id).put("sender", m.sender).put("recipient", m.recipient)
+                        .put("text", m.text).put("timestamp", m.timestamp).put("incoming", m.incoming)
+                        .put("state", m.state.name).put("spam", m.recoveredFromSpam)
+                )
+            }
+            root.put(JSONObject().put("email", c.email).put("title", c.title).put("messages", messages))
         }
         prefs.edit().putString("chats", root.toString()).apply()
     }
+
     fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
 
     fun setLastChat(email: String?) {
@@ -74,7 +100,27 @@ class McRepository(context: Context) {
     }
 
     fun deleteChat(email: String) {
-        save(chats().filterNot { it.email.equals(email, true) })
-        if (lastChat().equals(email, true)) setLastChat(null)
+        val normalized = email.trim().lowercase()
+        val deleted = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
+        deleted.add(normalized)
+        val remaining = chats().filterNot { it.email.equals(normalized, true) }
+        val root = JSONArray()
+        remaining.forEach { c ->
+            val messages = JSONArray()
+            c.messages.forEach { m ->
+                messages.put(
+                    JSONObject()
+                        .put("id", m.id).put("sender", m.sender).put("recipient", m.recipient)
+                        .put("text", m.text).put("timestamp", m.timestamp).put("incoming", m.incoming)
+                        .put("state", m.state.name).put("spam", m.recoveredFromSpam)
+                )
+            }
+            root.put(JSONObject().put("email", c.email).put("title", c.title).put("messages", messages))
+        }
+        prefs.edit()
+            .putString("chats", root.toString())
+            .putStringSet("deleted_chats", deleted)
+            .apply()
+        if (lastChat().equals(normalized, true)) setLastChat(null)
     }
 }
