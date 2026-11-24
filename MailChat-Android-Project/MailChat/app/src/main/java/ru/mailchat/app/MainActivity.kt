@@ -518,7 +518,12 @@ class MainActivity : ComponentActivity() {
             while (isActive) {
                 val seconds = if (appForeground) repo.openIntervalSeconds() else repo.minimizedIntervalSeconds()
                 delay(seconds.coerceAtLeast(5) * 1000L)
-                if (token != null) syncNow()
+                if (token != null) {
+                    // Start the next poll interval only after the current sync finishes.
+                    // This prevents timer ticks from piling up behind a slow request.
+                    if (!syncInProgress) syncNow()
+                    while (isActive && syncInProgress) delay(250)
+                }
             }
         }
     }
