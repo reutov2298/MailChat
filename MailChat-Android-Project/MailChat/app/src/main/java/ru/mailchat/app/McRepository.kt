@@ -5,11 +5,36 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class McRepository(context: Context) {
+    companion object { private val syncLock = Any() }
     private val prefs = context.getSharedPreferences("mc_local", Context.MODE_PRIVATE)
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
     fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
+
+    fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 60)
+    fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 180)
+    fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 900)
+    fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
+
+    fun acquireSyncLock(): Boolean = synchronized(syncLock) {
+        val now = System.currentTimeMillis()
+        if (prefs.getLong("sync_lock_until", 0L) > now) return@synchronized false
+        prefs.edit().putLong("sync_lock_until", now + 10 * 60 * 1000L).apply()
+        true
+    }
+
+    fun releaseSyncLock() = synchronized(syncLock) {
+        prefs.edit().putLong("sync_lock_until", 0L).apply()
+    }
+    fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean) {
+        prefs.edit()
+            .putInt("sync_open_seconds", open.coerceIn(5, 86400))
+            .putInt("sync_minimized_seconds", minimized.coerceIn(5, 86400))
+            .putInt("sync_closed_seconds", closed.coerceIn(60, 604800))
+            .putBoolean("sync_diagnostic_click", diagnosticClick)
+            .apply()
+    }
     fun isProcessed(id: String): Boolean = prefs.getStringSet("processed", emptySet())?.contains(id) == true
     fun markProcessed(id: String) { val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf(); set.add(id); prefs.edit().putStringSet("processed", set).apply() }
     fun chats(): List<McChat> {
