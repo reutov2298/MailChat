@@ -133,9 +133,13 @@ object McProtocol {
                 )
             )
 
+            // MIME/Gmail may convert LF to CRLF. Signatures are calculated over LF.
+            // Normalize line endings exactly as in GmailTransport.send().
             val text = mail.body.substring(end + finish.length)
-                .trimStart('\r', '\n')
-                .trimEnd('\r', '\n')
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .trimStart('\n')
+                .trimEnd('\n')
 
             val messageId = values.getValue("x-mc-message-id")
             val chatId = values.getValue("x-mc-chat-id")
