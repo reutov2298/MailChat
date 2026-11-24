@@ -26,6 +26,8 @@ class McSyncWorker(
     override suspend fun doWork(): Result {
         val auth = McAuth(applicationContext)
         val repo = McRepository(applicationContext)
+        val logger = McLogger(applicationContext)
+        logger.info("Запущена фоновая автоматическая проверка почты")
         var lockAcquired = false
         return try {
             if (!repo.acquireSyncLock()) return Result.success()
@@ -40,6 +42,8 @@ class McSyncWorker(
                 onRequestStarted = {
                     if (repo.diagnosticClickEnabled()) playDiagnosticClick()
                 }
+                onServerRequest = { logger.server("Запрос Gmail API (фоновый): $it") }
+                onDiagnostic = { logger.debug(it) }
             }
             val since = repo.baseline().coerceAtLeast(1L)
             val incoming = withContext(Dispatchers.IO) {
@@ -85,8 +89,10 @@ class McSyncWorker(
             }
 
             if (accepted > 0) showIncomingNotification(accepted)
+            logger.info("Фоновая проверка завершена. Новых сообщений: $accepted")
             Result.success()
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            logger.error("Ошибка фоновой проверки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
             Result.retry()
         } finally {
             if (lockAcquired) repo.releaseSyncLock()
