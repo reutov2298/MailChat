@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -66,6 +67,7 @@ class MainActivity : ComponentActivity() {
     private var chats by mutableStateOf<List<McChat>>(emptyList())
     private var syncInProgress by mutableStateOf(false)
     private var appForeground = true
+    private var autoSyncJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,13 +82,7 @@ class MainActivity : ComponentActivity() {
         logger.add("Приложение запущено. Восстановлено чатов: ${chats.size}")
         if (!handleAuthIntent(intent) && auth.isConnected()) refreshToken()
         setContent { McApp() }
-        lifecycleScope.launch {
-            while (isActive) {
-                val seconds = if (appForeground) repo.openIntervalSeconds() else repo.minimizedIntervalSeconds()
-                delay(seconds.coerceAtLeast(5) * 1000L)
-                if (token != null) syncNow()
-            }
-        }
+        restartAutoSyncLoop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -300,6 +296,7 @@ class MainActivity : ComponentActivity() {
                 diagnosticClick
             )
             McSyncScheduler.schedule(this@MainActivity, repo.closedIntervalSeconds())
+            restartAutoSyncLoop()
             logger.add("Настройки интервалов синхронизации применены")
         }
         val clipboardManager = remember {
@@ -514,9 +511,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); appForeground = true; if (::repo.isInitialized) chats = repo.chats() }
+    private fun restartAutoSyncLoop() {
+        autoSyncJob?.cancel()
+        if (!::repo.isInitialized) return
+        autoSyncJob = lifecycleScope.launch {
+            while (isActive) {
+                val seconds = if (appForeground) repo.openIntervalSeconds() else repo.minimizedIntervalSeconds()
+                delay(seconds.coerceAtLeast(5) * 1000L)
+                if (token != null) syncNow()
+            }
+        }
+    }
 
-    override fun onPause() { appForeground = false; super.onPause() }
+    override fun onResume() {
+        super.onResume()
+        appForeground = true
+        if (::repo.isInitialized) chats = repo.chats()
+        restartAutoSyncLoop()
+    }
+
+    override fun onPause() {
+        appForeground = false
+        restartAutoSyncLoop()
+        super.onPause()
+    }
 
     private fun playDiagnosticClick() {
         runCatching {
@@ -534,5 +552,5 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() { super.onDestroy(); if (::auth.isInitialized) auth.close() }
+    override fun onDestroy() { autoSyncJob?.cancel(); super.onDestroy(); if (::auth.isInitialized) auth.close() }
 }
