@@ -16,7 +16,6 @@ import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import kotlin.coroutines.resume
 
 class McSyncWorker(
@@ -35,7 +34,7 @@ class McSyncWorker(
                 auth.accessToken { access, _ ->
                     if (continuation.isActive) continuation.resume(access)
                 }
-            } ?: return Result.retry()
+            } ?: return Result.success()
 
             val gmail = GmailTransport().apply {
                 onRequestStarted = {
