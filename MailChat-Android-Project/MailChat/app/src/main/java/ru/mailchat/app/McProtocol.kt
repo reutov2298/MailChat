@@ -57,7 +57,7 @@ object McProtocol {
         )
         fields.forEach { (name, value) ->
             val fieldBytes = value.toByteArray(Charsets.UTF_8)
-            lines += "MC_SIG_FIELD name=$name bytes=${fieldBytes.size} sha256=${sha256(fieldBytes)}"
+            lines += "MC_SIG_FIELD role=$role messageId=${input.messageId} name=$name bytes=${fieldBytes.size} sha256=${sha256(fieldBytes)}"
         }
         return lines
     }
