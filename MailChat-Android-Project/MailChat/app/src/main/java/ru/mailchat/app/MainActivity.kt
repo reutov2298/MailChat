@@ -74,6 +74,8 @@ class MainActivity : ComponentActivity() {
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
         gmail.onRequestStarted = { if (repo.diagnosticClickEnabled()) playDiagnosticClick() }
+        gmail.onServerRequest = { logger.server("Запрос Gmail API: $it") }
+        gmail.onDiagnostic = { logger.debug(it) }
         McSyncScheduler.schedule(this, repo.closedIntervalSeconds())
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 4102)
@@ -137,7 +139,7 @@ class MainActivity : ComponentActivity() {
                 }
                 logger.add("Gmail подключён: ${profile.email}")
                 authChanged++
-                syncNow()
+                syncNow(source = "после авторизации")
             } catch (e: Exception) {
                 errorText = e.message ?: "Ошибка Gmail API"
                 logger.add("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
@@ -166,7 +168,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun syncNow(done: (String) -> Unit = {}) {
+    private fun syncNow(done: (String) -> Unit = {}, source: String = "ручная") {
         if (syncInProgress) {
             done("Проверка уже выполняется")
             return
@@ -175,7 +177,7 @@ class MainActivity : ComponentActivity() {
         if (!repo.acquireSyncLock()) { done("Проверка уже выполняется"); return }
         val since = repo.baseline().coerceAtLeast(1L)
         syncInProgress = true
-        logger.add("Начата проверка почты. Точка синхронизации: $since")
+        logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
         lifecycleScope.launch {
             var result = "Проверка завершена"
@@ -210,11 +212,12 @@ class MainActivity : ComponentActivity() {
                     val verification = McProtocol.verifyDetailed(
                         mail, accountEmail.ifBlank { repo.myEmail() }
                     )
+                    verification.diagnostics.forEach { logger.debug(it) }
                     val parsed = verification.parsed
 
                     if (parsed == null) {
                         if (mail.subject == "[MC] Message") {
-                            logger.warn("Сообщение MC отклонено. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                            logger.error("Сообщение MC отклонено. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
                         }
                         continue
                     }
@@ -521,7 +524,7 @@ class MainActivity : ComponentActivity() {
                 if (token != null) {
                     // Start the next poll interval only after the current sync finishes.
                     // This prevents timer ticks from piling up behind a slow request.
-                    if (!syncInProgress) syncNow()
+                    if (!syncInProgress) syncNow(source = "автоматическая")
                     while (isActive && syncInProgress) delay(250)
                 }
             }
