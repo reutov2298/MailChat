@@ -55,7 +55,15 @@ class McSyncWorker(
             for (mail in incoming) {
                 if (repo.isProcessed(mail.id)) continue
                 val verification = McProtocol.verifyDetailed(mail, repo.myEmail())
-                val parsed = verification.parsed ?: continue
+                verification.diagnostics.forEach { logger.debug(it) }
+                val parsed = verification.parsed
+                if (parsed == null) {
+                    if (mail.subject == "[MC] Message") {
+                        logger.error("Фоновая проверка отклонила сообщение MC. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                    }
+                    continue
+                }
+                logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
 
                 if (chats.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
                     repo.markProcessed(mail.id)
