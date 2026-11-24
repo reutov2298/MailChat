@@ -39,18 +39,21 @@ jobs:
           printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
           chmod 600 "$HOME/.android/debug.keystore"
 
-      - name: Inspect restored signing key
-        run: keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android
+      - name: Validate restored signing key
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.MC_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$KEYSTORE_PASSWORD"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass "$KEYSTORE_PASSWORD"
 
       - name: Build APK
         env:
           GOOGLE_OAUTH_CLIENT_ID: ${{ vars.GOOGLE_OAUTH_CLIENT_ID }}
+          KEYSTORE_PASSWORD: ${{ secrets.MC_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.MC_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.MC_KEY_PASSWORD }}
         run: |
-          MC_KEYSTORE_PATH="$HOME/.android/debug.keystore" \
-          KEYSTORE_PASSWORD=android \
-          KEY_ALIAS=AndroidDebugKey \
-          KEY_PASSWORD=android \
-          gradle assembleDebug
+          MC_KEYSTORE_PATH="$HOME/.android/debug.keystore" gradle assembleDebug
 
       - name: Verify APK signature and upgrade identity
         run: |
