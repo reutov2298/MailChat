@@ -514,7 +514,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); appForeground = true }
+    override fun onResume() { super.onResume(); appForeground = true; if (::repo.isInitialized) chats = repo.chats() }
 
     override fun onPause() { appForeground = false; super.onPause() }
 
