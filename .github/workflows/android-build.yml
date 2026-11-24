@@ -57,8 +57,9 @@ jobs:
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose "$APK"
           BUILD_TOOLS="$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          test -n "$BUILD_TOOLS" || { echo "Android build-tools are not installed"; exit 1; }
+          "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK")"
           echo "$BADGING" | grep -q "package: name='ru.mailchat.app' versionCode='6' versionName='1.0.4'"
           ACTUAL="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/.* certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
