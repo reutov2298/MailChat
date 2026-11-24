@@ -21,5 +21,6 @@ data class McChat(
     val title: String = email,
     val messages: List<McMessage> = emptyList(),
     val nameManuallySet: Boolean = false,
-    val senderName: String? = null
+    val senderName: String? = null,
+    val avatarUrl: String? = null
 )

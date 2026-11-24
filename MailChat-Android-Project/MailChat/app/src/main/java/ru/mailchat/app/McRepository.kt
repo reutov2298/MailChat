@@ -109,7 +109,7 @@ class McRepository(context: Context) {
                 senderName != null -> senderName
                 else -> email
             }
-            McChat(email, displayTitle, parsed, manuallyNamed, senderName)
+            McChat(email, displayTitle, parsed, manuallyNamed, senderName, j.optString("avatarUrl").takeIf { it.isNotBlank() })
         }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
 
@@ -125,7 +125,7 @@ class McRepository(context: Context) {
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                 )
             }
-            root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("messages", messages))
+            root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
         prefs.edit().putString("chats", root.toString()).apply()
     }

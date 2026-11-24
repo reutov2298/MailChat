@@ -26,6 +26,7 @@ class GmailTransport {
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
+    data class ContactProfile(val name: String?, val photoUrl: String?)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String =
@@ -54,6 +55,23 @@ class GmailTransport {
     fun profile(token: String): Profile {
         val j = JSONObject(request("${GmailConfig.GMAIL_API}/profile", token))
         return Profile(j.optString("emailAddress"), j.optString("historyId"))
+    }
+
+    fun contactProfile(token: String, email: String): ContactProfile? {
+        val query = URLEncoder.encode(email.trim(), "UTF-8")
+        val url = "https://people.googleapis.com/v1/people:searchContacts?query=$query&pageSize=10&readMask=names,emailAddresses,photos"
+        val root = JSONObject(request(url, token))
+        val results = root.optJSONArray("results") ?: return null
+        for (i in 0 until results.length()) {
+            val person = results.optJSONObject(i)?.optJSONObject("person") ?: continue
+            val emails = person.optJSONArray("emailAddresses") ?: continue
+            val exactMatch = (0 until emails.length()).any { emails.optJSONObject(it)?.optString("value").equals(email, true) }
+            if (!exactMatch) continue
+            val name = person.optJSONArray("names")?.optJSONObject(0)?.optString("displayName")?.trim()?.takeIf { it.isNotBlank() }
+            val photo = person.optJSONArray("photos")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+            return ContactProfile(name, photo)
+        }
+        return null
     }
 
     fun send(token: String, from: String, to: String, text: String, chatId: String, publicKey: String, sign: (ByteArray) -> String): String {
@@ -142,11 +160,17 @@ class GmailTransport {
 
 
     private fun parseSenderDisplayName(from: String): String {
-        val angle = from.indexOf('<')
-        if (angle <= 0) return ""
-        val raw = from.substring(0, angle).trim().trim('"', '\'')
+        val normalized = from.replace(Regex("\\s+"), " ").trim()
+        val angleStart = normalized.lastIndexOf('<')
+        val angleEnd = normalized.lastIndexOf('>')
+        val raw = when {
+            angleStart > 0 && angleEnd > angleStart -> normalized.substring(0, angleStart).trim()
+            angleStart < 0 && angleEnd < 0 -> normalized.substringBeforeLast(" (", normalized).takeIf { it != normalized }?.trim().orEmpty()
+            else -> ""
+        }.trim().trim('"', '\'')
         if (raw.isBlank()) return ""
-        return decodeEncodedWords(raw).trim().trim('"', '\'')
+        val decoded = decodeEncodedWords(raw).replace(Regex("\\s+"), " ").trim().trim('"', '\'')
+        return decoded.takeIf { it.isNotBlank() && !it.contains('@') }.orEmpty()
     }
 
     private fun decodeEncodedWords(value: String): String {

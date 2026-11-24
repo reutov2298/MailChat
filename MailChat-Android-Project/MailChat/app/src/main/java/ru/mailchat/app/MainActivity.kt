@@ -22,6 +22,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.clip
+import coil.compose.AsyncImage
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -267,16 +270,29 @@ class MainActivity : ComponentActivity() {
                     )
 
                     val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
+                    val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
+                        (incomingName == null && current[index].senderName.isNullOrBlank())
+                    val contactProfile = if (needsContactProfile) {
+                        try {
+                            withContext(Dispatchers.IO) { gmail.contactProfile(t, parsed.sender) }
+                        } catch (e: Exception) {
+                            logger.debug("Профиль контакта недоступен для ${parsed.sender}: ${e.message.orEmpty().take(120)}")
+                            null
+                        }
+                    } else null
+                    val resolvedName = incomingName ?: contactProfile?.name
                     if (index >= 0) {
                         val existing = current[index]
                         current[index] = existing.copy(
-                            title = if (!existing.nameManuallySet && incomingName != null) incomingName else existing.title,
-                            senderName = incomingName ?: existing.senderName,
+                            title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
+                            senderName = resolvedName ?: existing.senderName,
+                            avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
                             messages = existing.messages + message
                         )
                     } else {
-                        current.add(McChat(parsed.sender, title = incomingName ?: parsed.sender,
-                            messages = listOf(message), senderName = incomingName))
+                        current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
+                            messages = listOf(message), senderName = resolvedName,
+                            avatarUrl = contactProfile?.photoUrl))
                     }
 
                     repo.save(current)
@@ -381,7 +397,8 @@ class MainActivity : ComponentActivity() {
                             deletions.forEach { deletion ->
                                 val secondsLeft = ceil(((deletion.value - deleteCountdownNow).coerceAtLeast(0L)) / 1000.0).toInt()
                                 if (secondsLeft > 0) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text("Удаление ${deletion.key} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                    val deletionName = chats.firstOrNull { it.email.equals(deletion.key, true) }?.title?.takeIf { !it.equals(deletion.key, true) } ?: deletion.key
+                                    Text("Удаление ${deletionName} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
                                     TextButton(onClick = {
                                         repo.cancelChatDeletion(deletion.key)
                                         pendingDeleteDeadlines.remove(deletion.key)
@@ -492,6 +509,7 @@ class MainActivity : ComponentActivity() {
                             }) { Text("Продолжить с Google") }
                         }
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
+                        Text("Для загрузки имён и фотографий из Google Контактов после обновления переподключите аккаунт: отключите его и подключите снова.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
@@ -595,8 +613,14 @@ class MainActivity : ComponentActivity() {
                                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
                                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
-                                                Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                                            if (!chat.avatarUrl.isNullOrBlank()) {
+                                                AsyncImage(model = chat.avatarUrl, contentDescription = "Фото контакта",
+                                                    modifier = Modifier.size(50.dp).clip(CircleShape).background(Blue),
+                                                    contentScale = ContentScale.Crop)
+                                            } else {
+                                                Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
+                                                    Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                                                }
                                             }
                                             Spacer(Modifier.width(13.dp))
                                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -694,7 +718,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(0) }
+        var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
+        LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
+        LaunchedEffect(chat.messages.size) {
+            if (scrollAfterSend && chat.messages.isNotEmpty()) {
+                listState.animateScrollToItem(chat.messages.lastIndex)
+                scrollAfterSend = false
+            }
+        }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             if (isSyncing || topPullDistance > 0f) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 if (isSyncing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -767,7 +798,7 @@ class MainActivity : ComponentActivity() {
                             focusedContainerColor = Color.Transparent
                         )
                     )
-                    IconButton(onClick = { if (draft.isNotBlank()) { onSend(draft.trim()); draft = "" } }, enabled = draft.isNotBlank()) {
+                    IconButton(onClick = { if (draft.isNotBlank()) { scrollAfterSend = true; onSend(draft.trim()); draft = "" } }, enabled = draft.isNotBlank()) {
                         Icon(Icons.Default.Send, "Отправить", tint = if (draft.isNotBlank()) Blue else Color.Gray)
                     }
                 }

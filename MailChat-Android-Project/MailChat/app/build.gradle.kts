@@ -12,8 +12,8 @@ android {
         manifestPlaceholders["appAuthRedirectScheme"] = "com.googleusercontent.apps.150613527215-b8pfo2q526mpvgihvlj03iq9kmjpdn9i"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.0.7"
+        versionCode = 10
+        versionName = "1.0.8"
         val oauthClientId = providers.gradleProperty("googleOAuthClientId").orElse(providers.environmentVariable("GOOGLE_OAUTH_CLIENT_ID")).getOrElse("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID")
         buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$oauthClientId\"")
     }
@@ -58,6 +58,7 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     debugImplementation("androidx.compose.ui:ui-tooling")
