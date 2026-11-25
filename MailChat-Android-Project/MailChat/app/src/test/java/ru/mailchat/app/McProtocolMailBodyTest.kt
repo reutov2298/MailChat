@@ -93,11 +93,11 @@ class McProtocolMailBodyTest {
         assertEquals("", result.parsed?.text)
     }
 
-    @Test fun unsupportedProtocolVersionIsReportedWithoutAcceptingMessage() {
+    @Test fun protocolV1IsRoutedToLegacySignatureVerifier() {
         val mail = signedMail("protocol diagnostic")
         val changed = mail.copy(body = mail.body.replace("X-MC-Protocol: 2", "X-MC-Protocol: 1"))
         val result = McProtocol.verifyDetailed(changed, "recipient@example.com")
         assertNull(result.parsed)
-        assertEquals("Неподдерживаемая версия протокола: [1]", result.reason)
+        assertEquals("Криптографическая подпись протокола v1 не прошла проверку", result.reason)
     }
 }
