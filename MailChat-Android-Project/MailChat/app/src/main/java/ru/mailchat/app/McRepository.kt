@@ -138,11 +138,24 @@ class McRepository(context: Context) {
     fun nextSequence(chatId: String, sender: String): Long {
         val key = "message_sequence:${chatId.lowercase()}:${sender.lowercase()}"
         val stored = prefs.getLong(key, 0L)
-        val existingMax = chats().firstOrNull { it.email.equals(chatId, true) }
-            ?.messages?.filter { it.sender.equals(sender, true) }?.maxOfOrNull { it.sequence } ?: 0L
+        val ownMessages = chats().firstOrNull { it.email.equals(chatId, true) }
+            ?.messages?.filter { it.sender.equals(sender, true) }.orEmpty()
+        // Legacy MC builds wrote sequence=1 to every message; count those records
+        // so the first upgraded message continues after the existing history.
+        val existingMax = maxOf(
+            ownMessages.maxOfOrNull { it.sequence } ?: 0L,
+            ownMessages.size.toLong()
+        )
         val next = maxOf(stored, existingMax) + 1L
         prefs.edit().putLong(key, next).commit()
         return next
+    }
+
+    fun sequenceForMutation(chatId: String, sender: String, messageId: String, current: Long): Long {
+        val messages = chats().firstOrNull { it.email.equals(chatId, true) }
+            ?.messages?.filter { it.sender.equals(sender, true) }.orEmpty()
+        val collision = current > 0L && messages.any { it.id != messageId && it.sequence == current }
+        return if (current <= 0L || collision) nextSequence(chatId, sender) else current
     }
 
     fun orderedMessages(messages: List<McMessage>): List<McMessage> =
