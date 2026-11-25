@@ -9,7 +9,7 @@ This project continues the existing `MailChat` Android project. Package name rem
 - Gmail API REST transport for profile lookup, sending, message listing, label management, archiving, and statistics.
 - A dedicated Gmail label named `MC`; incoming messages are labelled and archived only after local processing succeeds, while outgoing messages are labelled after sending.
 - One-time historical migration: candidate mail is found by the MC DATA marker and accepted only after the current protocol v2 fields and Ed25519 signature validate. Valid incoming mail is archived; valid sent mail receives the MC label. Migration checkpoints survive interruption.
-- Manual per-label folder statistics plus an exact unique-message count across `in:anywhere`.
+- Manual per-label folder statistics plus an exact unique-message count by paginating all Gmail message IDs, including spam and trash.
 - Confirmed permanent deletion of only messages currently carrying the MC label, with a saved ID snapshot, per-batch label revalidation, and resumable progress.
 - The restricted `https://mail.google.com/` OAuth scope is requested incrementally only when the user invokes permanent deletion; ordinary MC operation continues to use `gmail.modify`.
 - First-connection baseline: historical messages are not imported into chats; a separate signed-message migration only labels and archives verified MC messages.
