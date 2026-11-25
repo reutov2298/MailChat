@@ -519,7 +519,7 @@ class MainActivity : ComponentActivity() {
                             }) { Text("Продолжить с Google") }
                         }
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
-                        Text("Для загрузки имён и фотографий из Google Контактов после обновления переподключите аккаунт: отключите его и подключите снова.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("После обновления отключите и снова подключите Google-аккаунт, чтобы разрешить MC получать имя и фото профиля отправителя.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
