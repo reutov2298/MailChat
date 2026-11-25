@@ -47,6 +47,11 @@ class McSyncWorker(
             }
             val mailManager = McMailManager(McGmailAdmin(), repo, logger)
             val labelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(token) }
+            val pendingOutbound = repo.pendingOutgoingLabels()
+            if (pendingOutbound.isNotEmpty()) {
+                withContext(Dispatchers.IO) { McGmailAdmin().modifyMessages(token, pendingOutbound.toList(), add = listOf(labelId)) }
+                repo.completeOutgoingLabels(pendingOutbound)
+            }
             val since = repo.baseline().coerceAtLeast(1L)
             val incoming = withContext(Dispatchers.IO) {
                 gmail.list(token, "after:$since {in:inbox in:spam}", 50)
