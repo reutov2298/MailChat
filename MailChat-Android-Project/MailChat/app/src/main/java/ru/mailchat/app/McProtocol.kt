@@ -12,7 +12,9 @@ object McProtocol {
         val sender: String,
         val recipient: String,
         val text: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val senderName: String,
+        val senderAvatarUrl: String
     )
 
     data class Verification(
@@ -25,16 +27,18 @@ object McProtocol {
         val messageId: String, val chatId: String, val senderId: String,
         val sender: String, val recipient: String, val version: String,
         val messageType: String, val timestamp: String, val sequence: String,
-        val keyId: String, val publicKey: String, val text: String
+        val keyId: String, val publicKey: String, val text: String,
+        val senderName: String, val senderAvatarUrl: String
     )
 
     fun normalizeText(value: String): String =
         value.replace("\r\n", "\n").replace('\r', '\n').trimEnd('\n')
 
     fun canonical(input: CanonicalInput): String = listOf(
-        "1", input.messageId, input.chatId, input.senderId, input.sender,
+        "2", input.messageId, input.chatId, input.senderId, input.sender,
         input.recipient, input.version, input.messageType, input.timestamp,
-        input.sequence, input.keyId, input.publicKey, normalizeText(input.text)
+        input.sequence, input.keyId, input.publicKey, input.senderName,
+        input.senderAvatarUrl, normalizeText(input.text)
     ).joinToString("\n")
 
     private fun sha256(bytes: ByteArray): String =
@@ -47,6 +51,7 @@ object McProtocol {
             "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
             "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
             "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
+            "senderName" to input.senderName, "senderAvatarUrl" to input.senderAvatarUrl,
             "text" to normalizeText(input.text)
         )
         val bytes = canonical(input).toByteArray(Charsets.UTF_8)
@@ -67,7 +72,7 @@ object McProtocol {
         "x-mc-sender-id", "x-mc-sender", "x-mc-recipient",
         "x-mc-version", "x-mc-message-type", "x-mc-timestamp",
         "x-mc-sequence", "x-mc-key-id", "x-mc-public-key",
-        "x-mc-signature-algorithm", "x-mc-signature"
+        "x-mc-sender-name", "x-mc-sender-avatar", "x-mc-signature-algorithm", "x-mc-signature"
     )
 
     fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? {
@@ -147,7 +152,7 @@ object McProtocol {
                 }
             }
 
-            if (values["x-mc-protocol"] != "1") {
+            if (values["x-mc-protocol"] != "2") {
                 return Verification(null, "Неподдерживаемая версия протокола")
             }
 
@@ -195,11 +200,22 @@ object McProtocol {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
+            fun decodeProfileField(key: String): String {
+                val encoded = values.getValue(key)
+                require(encoded.length <= 1100) { "Profile field too large" }
+                return String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+            }
+            val senderName = decodeProfileField("x-mc-sender-name").replace(Regex("[\\r\\n]+"), " ").trim().take(200)
+            val senderAvatarUrl = decodeProfileField("x-mc-sender-avatar").trim()
+            if (senderAvatarUrl.isNotBlank() && (!senderAvatarUrl.startsWith("https://") || senderAvatarUrl.length > 700)) {
+                return Verification(null, "Недопустимый адрес аватара")
+            }
             val input = CanonicalInput(
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
                 values.getValue("x-mc-version"), values.getValue("x-mc-message-type"),
                 timestamp.toString(), values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text
+                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
+                senderName, senderAvatarUrl
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
             val signature = values.getValue("x-mc-signature")
@@ -208,7 +224,7 @@ object McProtocol {
                 return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
             }
 
-            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp), null, diagnostics)
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, senderName, senderAvatarUrl), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }
