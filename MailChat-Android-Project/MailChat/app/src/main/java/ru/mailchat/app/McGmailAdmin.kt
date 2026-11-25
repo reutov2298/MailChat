@@ -11,6 +11,11 @@ import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
+internal object McGmailDeleteVerification {
+    fun remainingIds(requestedIds: List<String>, snapshot: McGmailAdmin.MessageLabelSnapshot): List<String> =
+        requestedIds.distinct().filter { it !in snapshot.missing && it in snapshot.present }
+}
+
 class McGmailAdmin {
     private val http = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
@@ -187,6 +192,17 @@ class McGmailAdmin {
             if (chunk.isEmpty()) return@forEach
             call(GmailConfig.GMAIL_API + "/messages/batchDelete", token, "POST",
                 JSONObject().put("ids", JSONArray(chunk)).toString())
+
+            // batchDelete has no per-message result: confirm each ID with a fresh GET.
+            val verification = messageLabelIds(token, chunk)
+            val remaining = McGmailDeleteVerification.remainingIds(chunk, verification)
+            if (remaining.isNotEmpty()) {
+                val idsText = remaining.take(10).joinToString(", ")
+                val suffix = if (remaining.size > 10) " (и ещё " + (remaining.size - 10) + ")" else ""
+                throw IllegalStateException(
+                    "Gmail принял batchDelete, но проверка обнаружила оставшиеся письма: " + idsText + suffix
+                )
+            }
         }
     }
 
