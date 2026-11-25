@@ -169,7 +169,7 @@ class GmailTransport {
         val metadata = linkedMapOf<Int, JSONObject>()
         messageIds.indices.chunked(10).forEach { indexes ->
             val chunk = indexes.map { messageIds[it] }
-            metadata.putAll(batchGetMessages(token, chunk, "metadata", indexes.first()))
+            batchGetMessages(token, chunk, "metadata", indexes.first()).forEach { (localIndex, item) -> metadata[indexes[localIndex]] = item }
         }
 
         val candidates = mutableSetOf<Int>()
