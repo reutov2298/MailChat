@@ -82,7 +82,7 @@ class GmailTransport {
         val canonicalInput = McProtocol.CanonicalInput(
             id, chatId, senderId, from, to, version, messageType, ts.toString(),
             sequenceValue, keyId, publicKey, normalizedText, messageVersionValue,
-            protocol == "2", protocol, senderName.orEmpty().take(200), senderAvatarUrl.orEmpty().take(700)
+            protocol in setOf("2", "3"), protocol, senderName.orEmpty().take(200), senderAvatarUrl.orEmpty().take(700)
         )
         val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
