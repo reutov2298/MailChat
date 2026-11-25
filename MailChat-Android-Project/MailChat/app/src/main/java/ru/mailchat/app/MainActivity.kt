@@ -49,6 +49,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.awaitEachGesture
+import androidx.compose.ui.input.pointer.awaitFirstDown
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -813,34 +816,12 @@ class MainActivity : ComponentActivity() {
         var editingMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         var actionMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         val listState = rememberLazyListState()
-        var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
         val imeInsets = WindowInsets.ime
         val baseViewConfiguration = LocalViewConfiguration.current
         val longPressViewConfiguration = remember(baseViewConfiguration) {
             object : ViewConfiguration by baseViewConfiguration {
                 override val longPressTimeoutMillis: Long = 800L
-            }
-        }
-        val topRefreshConnection = remember(listState, onRefresh) {
-            object : NestedScrollConnection {
-                // Observe the upward pull before LazyColumn consumes it.
-                // This keeps the refresh gesture available while the keyboard is open.
-                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                    // Messages are ordered oldest-to-newest and the chat opens at the newest end.
-                    // An upward swipe at that end is available only when canScrollForward is false.
-                    if (!listState.canScrollForward && available.y < 0f) {
-                        topPullDistance = (topPullDistance - available.y).coerceAtMost(with(density) { 120.dp.toPx() })
-                    } else if (available.y != 0f) {
-                        topPullDistance = 0f
-                    }
-                    return Offset.Zero
-                }
-                override suspend fun onPreFling(available: Velocity): Velocity {
-                    if (topPullDistance >= with(density) { 72.dp.toPx() } && !listState.canScrollForward) { topPullDistance = 0f; onRefresh() }
-                    else topPullDistance = 0f
-                    return Velocity.Zero
-                }
             }
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
@@ -858,9 +839,28 @@ class MainActivity : ComponentActivity() {
             }
         }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(
+                Modifier.weight(1f).fillMaxWidth().pointerInput(listState, onRefresh) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val startedAtNewestEnd = !listState.canScrollForward
+                        var upwardDistance = 0f
+                        while (true) {
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) break
+                            val deltaY = change.previousPosition.y - change.position.y
+                            if (deltaY > 0f) upwardDistance += deltaY
+                            else if (deltaY < 0f) upwardDistance = 0f
+                        }
+                        if (startedAtNewestEnd && upwardDistance >= with(density) { 72.dp.toPx() }) {
+                            onRefresh()
+                        }
+                    }
+                }
+            ) {
             CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().nestedScroll(topRefreshConnection)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
