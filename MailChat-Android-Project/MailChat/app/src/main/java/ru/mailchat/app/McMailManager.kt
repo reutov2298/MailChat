@@ -90,7 +90,7 @@ class McMailManager(
             ?: throw IllegalStateException("Не сохранён ID метки MC для продолжения удаления")
         var index = repo.deleteJobIndex().coerceIn(0, ids.size)
         while (index < ids.size) {
-            val chunk = ids.subList(index, minOf(index + 100, ids.size))
+            val chunk = ids.subList(index, minOf(index + 10, ids.size))
             val currentLabels = admin.messageLabelIds(token, chunk)
             val changedIds = chunk.filter { id -> labelId !in (currentLabels[id] ?: emptySet()) }
             if (changedIds.isNotEmpty()) {
