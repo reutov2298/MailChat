@@ -570,7 +570,11 @@ class MainActivity : ComponentActivity() {
                                         text = body, incoming = false, state = DeliveryState.QUEUED,
                                         sequence = repo.nextSequence(email.lowercase(), accountEmail)
                                     )
-                                } else editing.copy(text = body, version = editing.version + 1L, deleted = false, state = DeliveryState.QUEUED)
+                                } else editing.copy(
+                                    text = body, version = editing.version + 1L, deleted = false,
+                                    sequence = editing.sequence.takeIf { it > 0L } ?: repo.nextSequence(email.lowercase(), accountEmail),
+                                    state = DeliveryState.QUEUED
+                                )
                                 val updatedChats = chats.map { currentChat ->
                                     if (currentChat.email.equals(email, true)) {
                                         val messages = if (editing == null) currentChat.messages + outgoing
@@ -595,7 +599,11 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             onDeleteMessage = { target ->
-                                val deleted = target.copy(text = "", version = target.version + 1L, deleted = true, state = DeliveryState.QUEUED)
+                                val deleted = target.copy(
+                                    text = "", version = target.version + 1L, deleted = true,
+                                    sequence = target.sequence.takeIf { it > 0L } ?: repo.nextSequence(email.lowercase(), accountEmail),
+                                    state = DeliveryState.QUEUED
+                                )
                                 chats = chats.map { currentChat ->
                                     if (currentChat.email.equals(email, true)) currentChat.copy(
                                         messages = repo.orderedMessages(currentChat.messages.map { if (it.id == target.id) deleted else it })
