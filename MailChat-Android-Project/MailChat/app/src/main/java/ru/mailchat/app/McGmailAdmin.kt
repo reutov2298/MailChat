@@ -48,7 +48,7 @@ class McGmailAdmin {
             if (label.optString("name") == "MC") return label.optString("id")
         }
         val body = JSONObject().put("name", "MC").put("labelListVisibility", "labelShow")
-            .put("messageListVisibility", "show").put("type", "user").toString()
+            .put("messageListVisibility", "show").toString()
         val created = JSONObject(call(GmailConfig.GMAIL_API + "/labels", token, "POST", body))
         return created.optString("id").takeIf { it.isNotBlank() }
             ?: throw IllegalStateException("Gmail не вернул ID метки MC")
@@ -108,7 +108,7 @@ class McGmailAdmin {
             val detail = JSONObject(call(GmailConfig.GMAIL_API + "/labels/" + id, token))
             LabelStat(id, label.optString("name"), label.optString("type"),
                 detail.optInt("messagesTotal"), detail.optInt("messagesUnread"))
-        }.sortedWith(compareBy<LabelStat> { it.type != "system" }.thenBy { it.name.lowercase() })
+        }.sortedWith(compareBy<LabelStat> { !it.type.equals("system", true) }.thenBy { it.name.lowercase() })
     }
 
     fun batchDelete(token: String, ids: List<String>) {
