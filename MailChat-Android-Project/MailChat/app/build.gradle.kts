@@ -63,4 +63,5 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
