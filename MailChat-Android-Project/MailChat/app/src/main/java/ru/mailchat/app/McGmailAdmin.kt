@@ -20,6 +20,7 @@ class McGmailAdmin {
     private val http = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
     data class Page(val ids: List<String>, val nextPageToken: String?, val estimate: Int)
+    data class MessageLabelSnapshot(val present: Map<String, Set<String>>, val missing: Set<String>)
     data class LabelStat(val id: String, val name: String, val type: String, val total: Int, val unread: Int, val error: String? = null)
     data class Candidate(val message: GmailTransport.RemoteMessage, val labels: Set<String>)
 
@@ -117,8 +118,8 @@ class McGmailAdmin {
         }.sortedWith(compareBy<LabelStat> { !it.type.equals("system", true) }.thenBy { it.name.lowercase() })
     }
 
-    fun messageLabelIds(token: String, ids: List<String>): Map<String, Set<String>> {
-        if (ids.isEmpty()) return emptyMap()
+    fun messageLabelIds(token: String, ids: List<String>): MessageLabelSnapshot {
+        if (ids.isEmpty()) return MessageLabelSnapshot(emptyMap(), emptySet())
         val boundary = "mc_verify_" + UUID.randomUUID().toString().replace("-", "")
         val body = buildString {
             ids.forEachIndexed { index, id ->
@@ -132,20 +133,37 @@ class McGmailAdmin {
             "multipart/mixed; boundary=" + boundary)
         val responseBoundary = Regex("(?m)^--([^\\\\r\\\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Не найден разделитель ответа проверки меток")
-        return response.split("--" + responseBoundary).mapNotNull { part ->
+        val present = linkedMapOf<String, Set<String>>()
+        val missing = linkedSetOf<String>()
+        var fallbackIndex = 0
+        response.split("--" + responseBoundary).forEach { part ->
             val start = part.indexOf("HTTP/1.")
-            if (start < 0) return@mapNotNull null
+            if (start < 0) return@forEach
+            val contentIndex = Regex("(?i)Content-ID:\\s*<[^>]*check-(\\d+)>").find(part)
+                ?.groupValues?.get(1)?.toIntOrNull()
+            val requestedId = ids.getOrNull(contentIndex ?: fallbackIndex)
+            fallbackIndex++
+            val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
+                ?: throw IllegalStateException("Не удалось определить HTTP-статус ответа Gmail batch")
+            if (status == 404) {
+                if (requestedId != null) missing += requestedId
+                return@forEach
+            }
+            if (status !in 200..299) throw IllegalStateException("Gmail batch metadata вернул HTTP " + status)
             val jsonStart = part.indexOf("{", start)
             val jsonEnd = part.lastIndexOf("}")
-            if (jsonStart < 0 || jsonEnd < jsonStart) return@mapNotNull null
-            val item = runCatching { JSONObject(part.substring(jsonStart, jsonEnd + 1)) }.getOrNull()
-                ?: return@mapNotNull null
-            val id = item.optString("id")
-            if (id.isBlank()) return@mapNotNull null
+            if (jsonStart < 0 || jsonEnd < jsonStart) throw IllegalStateException("Пустой ответ Gmail при проверке меток")
+            val item = JSONObject(part.substring(jsonStart, jsonEnd + 1))
+            val id = item.optString("id").ifBlank { requestedId.orEmpty() }
+            if (id.isBlank()) throw IllegalStateException("Gmail не вернул ID письма при проверке меток")
             val labelArray = item.optJSONArray("labelIds")
             val labels = (0 until (labelArray?.length() ?: 0)).map { labelArray!!.optString(it) }.toSet()
-            id to labels
-        }.toMap()
+            present[id] = labels
+        }
+        if (present.size + missing.size != ids.distinct().size) {
+            throw IllegalStateException("Gmail вернул неполный набор результатов проверки меток")
+        }
+        return MessageLabelSnapshot(present, missing)
     }
 
     fun batchDelete(token: String, ids: List<String>) {
