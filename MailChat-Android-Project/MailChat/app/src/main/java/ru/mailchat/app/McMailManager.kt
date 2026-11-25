@@ -29,7 +29,22 @@ class McMailManager(
         var estimate = repo.migrationEstimate()
         logger.info("Первоначальная очистка старых писем MC: продолжение с сохранённой позиции")
         while (true) {
-            val (candidates, page) = admin.candidatePage(token, pageToken, 50)
+            val pageResult = try {
+                admin.candidatePage(token, pageToken, 50)
+            } catch (error: Exception) {
+                val reason = error.message.orEmpty()
+                val staleToken = pageToken != null &&
+                    (reason.contains("pageToken", true) || reason.contains("invalid page", true) ||
+                     reason.contains("invalidArgument", true))
+                if (!staleToken) throw error
+                logger.error("Срок действия позиции Gmail истёк; безопасно начинаем миграцию заново")
+                pageToken = null
+                processed = 0
+                estimate = 0
+                repo.saveMigrationCheckpoint(null, 0, 0)
+                admin.candidatePage(token, null, 50)
+            }
+            val (candidates, page) = pageResult
             if (estimate == 0) estimate = page.estimate
             val incomingIds = mutableListOf<String>()
             val outgoingIds = mutableListOf<String>()
