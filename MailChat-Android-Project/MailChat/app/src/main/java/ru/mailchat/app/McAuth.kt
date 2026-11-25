@@ -48,14 +48,20 @@ class McAuth(private val context: Context) {
         service.performTokenRequest(response.createTokenExchangeRequest()) { tokenResponse, tokenError ->
             if (tokenResponse != null) {
                 val saved = prefs.getString("auth_state", null)
-                val state = if (saved.isNullOrBlank()) {
-                    AuthState(response, tokenResponse, tokenError)
-                } else {
-                    AuthState.jsonDeserialize(saved).apply {
-                        update(response, null)
-                        update(tokenResponse, tokenError)
-                    }
-                }
+                val previousRefreshToken = if (saved.isNullOrBlank()) null else
+                    runCatching { AuthState.jsonDeserialize(saved).refreshToken }.getOrNull()
+                val mergedTokenResponse = if (tokenResponse.refreshToken.isNullOrBlank() && !previousRefreshToken.isNullOrBlank()) {
+                    TokenResponse.Builder(tokenResponse.request)
+                        .setTokenType(tokenResponse.tokenType)
+                        .setAccessToken(tokenResponse.accessToken)
+                        .setAccessTokenExpirationTime(tokenResponse.accessTokenExpirationTime)
+                        .setIdToken(tokenResponse.idToken)
+                        .setRefreshToken(previousRefreshToken)
+                        .setScope(tokenResponse.scope)
+                        .setAdditionalParameters(tokenResponse.additionalParameters)
+                        .build()
+                } else tokenResponse
+                val state = AuthState(response, mergedTokenResponse, tokenError)
                 prefs.edit().putString("auth_state", state.jsonSerializeString()).apply()
                 callback(tokenResponse.accessToken, null)
             } else {
