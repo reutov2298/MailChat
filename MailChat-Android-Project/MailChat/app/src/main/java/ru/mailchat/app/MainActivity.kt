@@ -72,14 +72,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var logger: McLogger
     private lateinit var identity: McIdentity
     private val gmail = GmailTransport()
-    private val gmailAdmin = McGmailAdmin()
-    private lateinit var mailManager: McMailManager
-    private var mailMigrationBusy by mutableStateOf(false)
-    private var mailMigrationText by mutableStateOf("")
-    private var mailStatsBusy by mutableStateOf(false)
-    private var mailStatsText by mutableStateOf("")
-    private var mailDeleteBusy by mutableStateOf(false)
-    private var mailDeleteProgress by mutableStateOf("")
     private var token: String? = null
     private var accountEmail: String = ""
     private var errorText by mutableStateOf("")
@@ -94,7 +86,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
-        mailManager = McMailManager(gmailAdmin, repo, logger)
         gmail.onRequestStarted = { if (repo.diagnosticClickEnabled()) playDiagnosticClick() }
         gmail.onServerRequest = { logger.server("Запрос Gmail API: $it") }
         gmail.onDiagnostic = { logger.debug(it) }
@@ -121,9 +112,6 @@ class MainActivity : ComponentActivity() {
         val handled = auth.handle(intent) { access, error ->
             if (access != null) {
                 token = access
-                if (auth.hasPermanentDeleteScope()) {
-                    mailDeleteProgress = "Дополнительное разрешение Google получено. Нажмите кнопку удаления ещё раз."
-                }
                 logger.add("Авторизация Google выполнена")
                 authChanged++
                 loadProfileAndSetBaseline()
@@ -171,47 +159,6 @@ class MainActivity : ComponentActivity() {
                     logger.add("Первичная точка синхронизации сохранена; старые письма не импортируются")
                 }
                 logger.add("Gmail подключён: ${profile.email}")
-                try {
-                    val mcLabelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
-                    val pendingOutbound = repo.pendingOutgoingLabels()
-                    if (pendingOutbound.isNotEmpty()) {
-                        runCatching {
-                            withContext(Dispatchers.IO) { gmailAdmin.modifyMessages(t, pendingOutbound.toList(), add = listOf(mcLabelId)) }
-                        }.onSuccess { repo.completeOutgoingLabels(pendingOutbound) }
-                            .onFailure { logger.error("Не удалось повторно пометить исходящие письма MC: " + it.message.orEmpty().take(180)) }
-                    }
-                    if (!repo.migrationDone()) {
-                        mailMigrationBusy = true
-                        mailMigrationText = "Идёт первоначальная очистка старых писем MC..."
-                        withContext(Dispatchers.IO) {
-                            mailManager.migrateOldMessages(t, profile.email) { p ->
-                                runOnUiThread {
-                                    mailMigrationText = if (p.complete) {
-                                        "Первоначальная очистка завершена. Проверено: ${p.processed}"
-                                    } else {
-                                        "Первоначальная очистка: проверено ${p.processed} из примерно ${p.estimate}; осталось около ${maxOf(p.estimate - p.processed, 0)}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } catch (mailError: Exception) {
-                    mailMigrationText = "Ошибка первоначальной очистки: ${mailError.message.orEmpty().take(180)}"
-                    logger.error("Ошибка управления письмами MC: ${mailMigrationText}")
-                } finally {
-                    mailMigrationBusy = false
-                }
-                if (repo.deleteJobConfirmed() && auth.hasPermanentDeleteScope()) {
-                    runCatching {
-                        mailDeleteBusy = true
-                        withContext(Dispatchers.IO) {
-                            mailManager.resumeConfirmedDelete(t) { done, total ->
-                                runOnUiThread { mailDeleteProgress = "Удалено ${done} из ${total}; осталось ${total - done}" }
-                            }
-                        }
-                    }.onFailure { logger.error("Ошибка продолжения удаления MC: ${it.message.orEmpty().take(200)}") }
-                    mailDeleteBusy = false
-                }
                 authChanged++
                 syncNow(source = "после авторизации")
             } catch (e: Exception) {
@@ -232,18 +179,7 @@ class MainActivity : ComponentActivity() {
                 logger.add("Начата отправка сообщения получателю: $to")
                 val id = withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
-                    val ownProfile = runCatching { gmail.ownProfile(t) }.onFailure {
-                        logger.error("Google profile: получение не удалось: ${it.javaClass.simpleName}")
-                    }.getOrNull()
-                    val sentId = gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey(), ownProfile?.name, ownProfile?.photoUrl) { bytes -> McCrypto.sign(pair, bytes) }
-                    runCatching {
-                        val labelId = mailManager.ensureLabel(t)
-                        gmailAdmin.modifyMessages(t, listOf(sentId), add = listOf(labelId))
-                    }.onFailure {
-                        repo.queueOutgoingLabel(sentId)
-                        logger.error("Исходящее письмо отправлено, но метка MC не установлена: ${it.message.orEmpty().take(160)}")
-                    }
-                    sentId
+                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey()) { bytes -> McCrypto.sign(pair, bytes) }
                 }
                 logger.add("Сообщение отправлено в Gmail: $id")
                 done(null)
@@ -276,7 +212,6 @@ class MainActivity : ComponentActivity() {
 
                 var accepted = 0
                 var skipped = 0
-                val archiveIds = mutableListOf<String>()
 
                 for (mail in incoming) {
                     if (repo.isProcessed(mail.id)) {
@@ -309,9 +244,14 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
+                    if (mail.spam) {
+                        withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
+                        logger.info("Подтверждённое сообщение MC возвращено из спама")
+                    }
+
                     val current = repo.chats().toMutableList()
                     if (current.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                        archiveIds += mail.id
+                        repo.markProcessed(mail.id)
                         skipped++
                         continue
                     }
@@ -329,49 +269,36 @@ class MainActivity : ComponentActivity() {
                         recoveredFromSpam = mail.spam
                     )
 
-                    val incomingName = parsed.senderName.trim().takeIf { it.isNotBlank() }
-                    val incomingAvatar = parsed.senderAvatarUrl.trim().takeIf { it.isNotBlank() }
-                    val needsContactProfile = incomingName == null || incomingAvatar == null
+                    val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
+                    val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
+                        (incomingName == null && current[index].senderName.isNullOrBlank())
                     val contactProfile = if (needsContactProfile) {
                         try {
                             withContext(Dispatchers.IO) { gmail.contactProfile(t, parsed.sender) }
                         } catch (e: Exception) {
-                            logger.error("People API: ошибка получения профиля: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(500)}")
+                            logger.debug("Профиль контакта недоступен для ${parsed.sender}: ${e.message.orEmpty().take(120)}")
                             null
                         }
                     } else null
-                    logger.info("Профиль контакта: lookup=${if (needsContactProfile) "выполнен" else "пропущен"}, result=${contactProfile != null}, namePresent=${!contactProfile?.name.isNullOrBlank()}, photoPresent=${!contactProfile?.photoUrl.isNullOrBlank()}, senderHeaderNamePresent=${!incomingName.isNullOrBlank()}")
                     val resolvedName = incomingName ?: contactProfile?.name
-                    val resolvedAvatar = incomingAvatar ?: contactProfile?.photoUrl
                     if (index >= 0) {
                         val existing = current[index]
                         current[index] = existing.copy(
                             title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
                             senderName = resolvedName ?: existing.senderName,
-                            avatarUrl = resolvedAvatar ?: existing.avatarUrl,
+                            avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
                             messages = existing.messages + message
                         )
                     } else {
                         current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
                             messages = listOf(message), senderName = resolvedName,
-                            avatarUrl = resolvedAvatar))
+                            avatarUrl = contactProfile?.photoUrl))
                     }
 
-                    if (!repo.saveDurably(current)) throw IllegalStateException("Не удалось надёжно сохранить сообщение MC на устройстве")
-                    archiveIds += mail.id
-                    val savedChat = current.firstOrNull { it.email.equals(parsed.sender, true) }
-                    logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "подписанный MC"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
+                    repo.save(current)
+                    repo.markProcessed(mail.id)
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
-                }
-
-                if (archiveIds.isNotEmpty()) {
-                    val labelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
-                    withContext(Dispatchers.IO) {
-                        gmailAdmin.modifyMessages(t, archiveIds, add = listOf(labelId), remove = listOf("INBOX", "SPAM"))
-                    }
-                    archiveIds.distinct().forEach { repo.markProcessed(it) }
-                    logger.info("Обработанные письма MC помечены и архивированы: ${archiveIds.distinct().size}")
                 }
 
                 chats = repo.chats()
@@ -402,8 +329,6 @@ class MainActivity : ComponentActivity() {
         var editContactProfile by remember { mutableStateOf(false) }
         var contactName by remember { mutableStateOf("") }
         var status by remember { mutableStateOf("") }
-        var deleteSnapshot by remember { mutableStateOf<List<String>>(emptyList()) }
-        var showDeleteConfirm by remember { mutableStateOf(false) }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
         var openSeconds by remember { mutableStateOf(repo.openIntervalSeconds().toString()) }
@@ -472,11 +397,8 @@ class MainActivity : ComponentActivity() {
                             deletions.forEach { deletion ->
                                 val secondsLeft = ceil(((deletion.value - deleteCountdownNow).coerceAtLeast(0L)) / 1000.0).toInt()
                                 if (secondsLeft > 0) Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    val deletionChat = chats.firstOrNull { it.email.equals(deletion.key, true) }
-                                    val deletionName = deletionChat?.senderName?.takeIf { it.isNotBlank() }
-                                        ?: deletionChat?.title?.takeIf { !it.equals(deletion.key, true) }
-                                        ?: deletion.key
-                                    Text("Удаление чата с ${deletionName} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
+                                    val deletionName = chats.firstOrNull { it.email.equals(deletion.key, true) }?.title?.takeIf { !it.equals(deletion.key, true) } ?: deletion.key
+                                    Text("Удаление ${deletionName} через $secondsLeft", modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium, fontSize = 13.sp, maxLines = 1)
                                     TextButton(onClick = {
                                         repo.cancelChatDeletion(deletion.key)
                                         pendingDeleteDeadlines.remove(deletion.key)
@@ -587,7 +509,7 @@ class MainActivity : ComponentActivity() {
                             }) { Text("Продолжить с Google") }
                         }
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
-                        Text("После обновления отключите и снова подключите Google-аккаунт, чтобы разрешить MC получать имя и фото профиля отправителя.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Для загрузки имён и фотографий из Google Контактов после обновления переподключите аккаунт: отключите его и подключите снова.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
@@ -605,109 +527,6 @@ class MainActivity : ComponentActivity() {
                             enabled = token != null && !syncInProgress
                         ) { Text(if (syncInProgress) "Проверяем..." else "Проверить новые сообщения") }
                         Text("Старые письма не импортируются. Точка начала синхронизации устанавливается при первом подключении.", fontSize = 13.sp)
-                        HorizontalDivider()
-                        Text("Управление письмами MC", fontWeight = FontWeight.Bold)
-                        Text(
-                            mailMigrationText.ifBlank {
-                                if (repo.migrationDone()) "Первоначальная очистка старых писем MC завершена."
-                                else "Первоначальная очистка ещё не завершена."
-                            },
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Button(
-                            onClick = {
-                                val currentToken = token
-                                if (currentToken != null && !mailMigrationBusy) {
-                                    mailMigrationBusy = true
-                                    lifecycleScope.launch {
-                                        try {
-                                            withContext(Dispatchers.IO) {
-                                                mailManager.migrateOldMessages(currentToken, accountEmail.ifBlank { repo.myEmail() }) { p ->
-                                                    runOnUiThread {
-                                                        mailMigrationText = if (p.complete) "Очистка завершена. Проверено: " + p.processed
-                                                        else "Очистка: проверено " + p.processed + " из примерно " + p.estimate + "; осталось около " + maxOf(p.estimate - p.processed, 0)
-                                                    }
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            mailMigrationText = "Ошибка очистки: " + e.message.orEmpty().take(180)
-                                            logger.error("Ошибка повторной миграции MC: " + e.message.orEmpty().take(180))
-                                        } finally {
-                                            mailMigrationBusy = false
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = token != null && !mailMigrationBusy && !repo.migrationDone()
-                        ) { Text(if (mailMigrationBusy) "Очистка..." else "Продолжить первоначальную очистку") }
-                        Button(
-                            onClick = {
-                                val currentToken = token
-                                if (currentToken != null && !mailStatsBusy) {
-                                    mailStatsBusy = true
-                                    mailStatsText = "Получаем статистику Gmail..."
-                                    lifecycleScope.launch {
-                                        try {
-                                            val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
-                                            mailStatsText = buildString {
-                                                if (stats.uniqueMessages != null) {
-                                                    append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
-                                                } else {
-                                                    append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
-                                                }
-                                                stats.labels.forEach { label ->
-                                                    append(label.name).append(": ").append(label.total)
-                                                    if (label.error != null) append(" — ошибка: ").append(label.error)
-                                                    else append(" (непрочитанных: ").append(label.unread).append(")")
-                                                    append("\n")
-                                                }
-                                            }
-                                        } catch (e: Exception) {
-                                            mailStatsText = "Ошибка получения статистики: " + e.message.orEmpty().take(180)
-                                        } finally {
-                                            mailStatsBusy = false
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = token != null && !mailStatsBusy
-                        ) { Text(if (mailStatsBusy) "Получаем статистику..." else "Статистика всех папок") }
-                        if (mailStatsText.isNotBlank()) {
-                            Text(mailStatsText, fontSize = 12.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Button(
-                            onClick = {
-                                val currentToken = token
-                                if (currentToken == null || mailDeleteBusy) return@Button
-                                if (!auth.hasPermanentDeleteScope()) {
-                                    mailDeleteProgress = "Для этой операции требуется отдельное разрешение Google на полный доступ к Gmail. Сейчас откроется повторное согласие."
-                                    try {
-                                        auth.start(this@MainActivity, includePermanentDeleteScope = true)
-                                    } catch (e: Exception) {
-                                        mailDeleteProgress = "Не удалось запросить разрешение: " + e.message.orEmpty().take(160)
-                                    }
-                                } else {
-                                    mailDeleteBusy = true
-                                    lifecycleScope.launch {
-                                        try {
-                                            deleteSnapshot = withContext(Dispatchers.IO) { mailManager.previewDelete(currentToken) }
-                                            showDeleteConfirm = deleteSnapshot.isNotEmpty()
-                                            mailDeleteProgress = if (deleteSnapshot.isEmpty()) "Писем с меткой MC не найдено."
-                                                else "Найдено писем MC: " + deleteSnapshot.size
-                                        } catch (e: Exception) {
-                                            mailDeleteProgress = "Ошибка поиска писем MC: " + e.message.orEmpty().take(180)
-                                        } finally {
-                                            mailDeleteBusy = false
-                                        }
-                                    }
-                                }
-                            },
-                            enabled = token != null && !mailDeleteBusy
-                        ) { Text(if (mailDeleteBusy) "Подготовка..." else "Удалить сообщения MC безвозвратно") }
-                        if (mailDeleteProgress.isNotBlank()) {
-                            Text(mailDeleteProgress, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
@@ -820,69 +639,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             }
-            if (showDeleteConfirm) {
-            AlertDialog(
-                onDismissRequest = { if (!mailDeleteBusy) showDeleteConfirm = false },
-                title = { Text("Безвозвратно удалить письма MC?") },
-                text = {
-                    Text("Будет удалено без возможности восстановления: " + deleteSnapshot.size +
-                        " писем с меткой MC. Локальные чаты и сообщения на телефоне останутся. Обычная почта не затрагивается.")
-                },
-                confirmButton = {
-                    TextButton(
-                        enabled = !mailDeleteBusy,
-                        onClick = {
-                            val currentToken = token ?: return@TextButton
-                            showDeleteConfirm = false
-                            mailDeleteBusy = true
-                            mailDeleteProgress = "Удаление..."
-                            lifecycleScope.launch {
-                                try {
-                                    val result = withContext(Dispatchers.IO) {
-                                        mailManager.deleteConfirmedSnapshot(currentToken, deleteSnapshot) { done, total ->
-                                            runOnUiThread { mailDeleteProgress = "Удалено " + done + " из " + total + "; осталось " + (total - done) }
-                                        }
-                                    }
-                                    mailDeleteProgress = if (result.changed) {
-                                        "Список писем изменился. Удалено до обнаружения изменения: " + result.deleted + ". Остальные письма не удалялись; выполните поиск заново."
-                                    } else {
-                                        "Безвозвратно удалено писем MC: " + result.deleted
-                                    }
-                                    deleteSnapshot = emptyList()
-                                    runCatching {
-                                        val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
-                                        mailStatsText = buildString {
-                                            if (stats.uniqueMessages != null) {
-                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
-                                            } else {
-                                                append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
-                                            }
-                                            stats.labels.forEach { label ->
-                                                append(label.name).append(": ").append(label.total)
-                                                if (label.error != null) append(" — ошибка: ").append(label.error)
-                                                else append(" (непрочитанных: ").append(label.unread).append(")")
-                                                append("\n")
-                                            }
-                                        }
-                                    }.onFailure {
-                                        mailStatsText = "Удаление завершено или прервано; обновить статистику не удалось: " + it.message.orEmpty().take(160)
-                                    }
-                                } catch (e: Exception) {
-                                    mailDeleteProgress = "Удаление прервано; прогресс сохранён: " + e.message.orEmpty().take(180)
-                                    logger.error("Ошибка безвозвратного удаления MC: " + e.message.orEmpty().take(200))
-                                } finally {
-                                    mailDeleteBusy = false
-                                }
-                            }
-                        }
-                    ) { Text("Удалить безвозвратно") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDeleteConfirm = false }) { Text("Отмена") }
-                }
-            )
-        }
-        if (showNew) {
+            if (showNew) {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
@@ -947,7 +704,6 @@ class MainActivity : ComponentActivity() {
         val listState = rememberLazyListState()
         var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
-        val imeInsets = WindowInsets.ime
         val topRefreshConnection = remember(listState, onRefresh) {
             object : NestedScrollConnection {
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
@@ -964,12 +720,6 @@ class MainActivity : ComponentActivity() {
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
         LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
-        LaunchedEffect(chat.email) {
-            snapshotFlow { imeInsets.getBottom(density) }.collect {
-                val lastIndex = chat.messages.lastIndex
-                if (lastIndex >= 0) listState.scrollToItem(lastIndex)
-            }
-        }
         LaunchedEffect(chat.messages.size) {
             if (scrollAfterSend && chat.messages.isNotEmpty()) {
                 listState.animateScrollToItem(chat.messages.lastIndex)

@@ -40,27 +40,7 @@ class McRepository(context: Context) {
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
-    fun setEmail(value: String) {
-        val previous = prefs.getString("email", "").orEmpty()
-        if (previous.isNotBlank() && !previous.equals(value, true)) {
-            prefs.edit()
-                .remove("gmail_mc_label_id")
-                .remove("gmail_mc_migration_done")
-                .remove("gmail_mc_migration_page")
-                .remove("gmail_mc_migration_processed")
-                .remove("gmail_mc_migration_estimate")
-                .remove("gmail_mc_migration_retry_after")
-                .remove("gmail_mc_migration_failures")
-                .remove("gmail_mc_delete_ids")
-                .remove("gmail_mc_delete_index")
-                .remove("gmail_mc_pending_outgoing_labels")
-                .remove("processed")
-                .putBoolean("gmail_mc_delete_confirmed", false)
-                .putLong("baseline", 0L)
-                .apply()
-        }
-        prefs.edit().putString("email", value).apply()
-    }
+    fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
 
     fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 60)
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 180)
@@ -95,60 +75,6 @@ class McRepository(context: Context) {
         set.add(id)
         prefs.edit().putStringSet("processed", set).apply()
     }
-
-    fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
-    fun setMcLabelId(value: String) { prefs.edit().putString("gmail_mc_label_id", value).commit() }
-
-    fun pendingOutgoingLabels(): Set<String> =
-        prefs.getStringSet("gmail_mc_pending_outgoing_labels", emptySet())?.toSet() ?: emptySet()
-    fun queueOutgoingLabel(id: String) {
-        val ids = pendingOutgoingLabels().toMutableSet()
-        ids.add(id)
-        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", ids).commit()
-    }
-    fun completeOutgoingLabels(ids: Collection<String>) {
-        val pending = pendingOutgoingLabels().toMutableSet()
-        pending.removeAll(ids.toSet())
-        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", pending).commit()
-    }
-
-    fun migrationDone(): Boolean = prefs.getBoolean("gmail_mc_migration_done", false)
-    fun migrationPageToken(): String? = prefs.getString("gmail_mc_migration_page", null)
-    fun migrationProcessed(): Int = prefs.getInt("gmail_mc_migration_processed", 0)
-    fun migrationEstimate(): Int = prefs.getInt("gmail_mc_migration_estimate", 0)
-    fun migrationRetryAfter(): Long = prefs.getLong("gmail_mc_migration_retry_after", 0L)
-    fun recordMigrationFailure(now: Long = System.currentTimeMillis()) {
-        val failures = (prefs.getInt("gmail_mc_migration_failures", 0) + 1).coerceAtMost(7)
-        val delay = minOf(3_600_000L, 60_000L shl (failures - 1))
-        prefs.edit().putInt("gmail_mc_migration_failures", failures)
-            .putLong("gmail_mc_migration_retry_after", now + delay).commit()
-    }
-    fun clearMigrationRetry() {
-        prefs.edit().remove("gmail_mc_migration_retry_after")
-            .remove("gmail_mc_migration_failures").commit()
-    }
-    fun saveMigrationCheckpoint(pageToken: String?, processed: Int, estimate: Int) {
-        prefs.edit().putString("gmail_mc_migration_page", pageToken)
-            .putInt("gmail_mc_migration_processed", processed)
-            .putInt("gmail_mc_migration_estimate", estimate).commit()
-    }
-    fun finishMigration() {
-        prefs.edit().putBoolean("gmail_mc_migration_done", true)
-            .remove("gmail_mc_migration_page").commit()
-    }
-
-    fun saveDeleteJob(ids: List<String>, nextIndex: Int = 0) {
-        prefs.edit().putString("gmail_mc_delete_ids", JSONArray(ids.distinct()).toString())
-            .putInt("gmail_mc_delete_index", nextIndex).putBoolean("gmail_mc_delete_confirmed", true).commit()
-    }
-    fun deleteJobIds(): List<String> = runCatching {
-        val array = JSONArray(prefs.getString("gmail_mc_delete_ids", "[]"))
-        (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
-    }.getOrDefault(emptyList())
-    fun deleteJobIndex(): Int = prefs.getInt("gmail_mc_delete_index", 0)
-    fun deleteJobConfirmed(): Boolean = prefs.getBoolean("gmail_mc_delete_confirmed", false)
-    fun updateDeleteJobIndex(index: Int) { prefs.edit().putInt("gmail_mc_delete_index", index).commit() }
-    fun clearDeleteJob() { prefs.edit().remove("gmail_mc_delete_ids").remove("gmail_mc_delete_index").putBoolean("gmail_mc_delete_confirmed", false).commit() }
 
     fun restoreChat(email: String) {
         val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -187,7 +113,7 @@ class McRepository(context: Context) {
         }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
 
-    private fun serializeChats(chats: List<McChat>): String {
+    fun save(chats: List<McChat>) {
         val root = JSONArray()
         chats.forEach { c ->
             val messages = JSONArray()
@@ -201,15 +127,8 @@ class McRepository(context: Context) {
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
-        return root.toString()
+        prefs.edit().putString("chats", root.toString()).apply()
     }
-
-    fun save(chats: List<McChat>) {
-        prefs.edit().putString("chats", serializeChats(chats)).apply()
-    }
-
-    fun saveDurably(chats: List<McChat>): Boolean =
-        prefs.edit().putString("chats", serializeChats(chats)).commit()
 
     fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
 

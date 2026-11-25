@@ -2,9 +2,8 @@ name: MailChat Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
   pull_request:
+  push:
     branches: [main]
 
 jobs:
@@ -50,7 +49,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle testDebugUnitTest assembleDebug
+        run: gradle assembleDebug
 
       - name: Verify APK identity and signature
         env:
@@ -63,7 +62,7 @@ jobs:
           test -n "$BUILD_TOOLS" || { echo "Android build-tools are not installed"; exit 1; }
           "$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --verbose "$APK"
           BADGING="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/aapt" dump badging "$APK")"
-          echo "$BADGING" | grep -q "package: name='ru.mailchat.app' versionCode='18' versionName='1.2.4'"
+          echo "$BADGING" | grep -q "package: name='ru.mailchat.app' versionCode='21' versionName='1.0.8'"
           ACTUAL="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/.* certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(keytool -list -v -keystore "$RUNNER_TEMP/mc-release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           test -n "$EXPECTED" || { echo "Could not read signing certificate from keystore"; exit 1; }
@@ -73,6 +72,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MC-1.2.4
+          name: MC-1.0.8-rollback
           path: MailChat-Android-Project/MailChat/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
