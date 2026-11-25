@@ -47,7 +47,7 @@ class McMailManager(
                     if (labelId !in candidate.labels) outgoingIds += mail.id
                 } else {
                     if (!verified.recipient.equals(ownEmail, true)) continue
-                    if ("MC" !in candidate.labels || "INBOX" in candidate.labels || "SPAM" in candidate.labels) incomingIds += mail.id
+                    if (labelId !in candidate.labels || "INBOX" in candidate.labels || "SPAM" in candidate.labels) incomingIds += mail.id
                 }
             }
             if (outgoingIds.isNotEmpty()) admin.modifyMessages(token, outgoingIds, add = listOf(labelId))
