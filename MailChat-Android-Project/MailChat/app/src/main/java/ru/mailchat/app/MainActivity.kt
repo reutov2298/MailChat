@@ -247,8 +247,7 @@ class MainActivity : ComponentActivity() {
         logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
         var result = "Проверка завершена"
-            try {
-                logger.add("Запрос списка входящих сообщений Gmail")
+            try {                logger.add("Запрос списка входящих сообщений Gmail")
                 val incoming = withContext(Dispatchers.IO) {
                     gmail.list(t, "after:$since {in:inbox in:spam}", 50)
                 }
@@ -497,8 +496,7 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Button(
-                                onClick = {
-                                    syncNow {
+                                onClick = {                                    syncNow {
                                         status = it
                                         logText = logger.read()
                                         logSize = logger.sizeBytes()
@@ -747,8 +745,7 @@ class MainActivity : ComponentActivity() {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
                         OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
                     }
                 }, confirmButton = { TextButton(onClick = {
@@ -824,16 +821,37 @@ class MainActivity : ComponentActivity() {
             }
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
-        LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
+        val orderedMessages = remember(chat.messages) {
+            chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id })
+        }
+        var knownIncomingMessageIds by remember(chat.email) {
+            mutableStateOf(chat.messages.filter { it.incoming }.map { it.id }.toSet())
+        }
+        LaunchedEffect(chat.email) { if (orderedMessages.isNotEmpty()) listState.scrollToItem(orderedMessages.lastIndex) }
         LaunchedEffect(chat.email) {
             snapshotFlow { imeInsets.getBottom(density) }.collect {
-                val lastIndex = chat.messages.lastIndex
+                val lastIndex = orderedMessages.lastIndex
                 if (lastIndex >= 0) listState.scrollToItem(lastIndex)
             }
         }
+        LaunchedEffect(chat.email, orderedMessages.map { it.id to it.incoming }) {
+            val currentIncomingIds = orderedMessages.filter { it.incoming }.map { it.id }.toSet()
+            val newlyReceived = orderedMessages.withIndex().filter { (index, message) ->
+                message.incoming && !message.deleted && message.id !in knownIncomingMessageIds
+            }
+            knownIncomingMessageIds = currentIncomingIds
+            if (newlyReceived.isNotEmpty()) {
+                val targetIndex = newlyReceived.last().index
+                withFrameNanos { }
+                withFrameNanos { }
+                if (targetIndex in orderedMessages.indices) {
+                    listState.animateScrollToItem(targetIndex)
+                }
+            }
+        }
         LaunchedEffect(chat.messages.size) {
-            if (scrollAfterSend && chat.messages.isNotEmpty()) {
-                listState.animateScrollToItem(chat.messages.lastIndex)
+            if (scrollAfterSend && orderedMessages.isNotEmpty()) {
+                listState.animateScrollToItem(orderedMessages.lastIndex)
                 scrollAfterSend = false
             }
         }
@@ -860,7 +878,7 @@ class MainActivity : ComponentActivity() {
             ) {
             CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
+                items(orderedMessages, key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             modifier = Modifier
@@ -997,8 +1015,7 @@ class MainActivity : ComponentActivity() {
                             actionMessage = null
                         }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
                     }
-                },
-                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
+                },                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
             )
         }
     }
