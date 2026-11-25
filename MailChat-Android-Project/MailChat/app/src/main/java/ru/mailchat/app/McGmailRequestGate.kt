@@ -7,9 +7,17 @@ package ru.mailchat.app
 internal object McGmailRequestGate {
     private val monitor = Any()
     private var lastStartedAt = 0L
+    private var blockedUntil = 0L
+
+    fun deferFor(delayMs: Long) = synchronized(monitor) {
+        blockedUntil = maxOf(blockedUntil, System.currentTimeMillis() + delayMs.coerceAtLeast(0L))
+    }
 
     fun <T> execute(minGapMs: Long, action: () -> T): T = synchronized(monitor) {
-        val waitMs = minGapMs - (System.currentTimeMillis() - lastStartedAt)
+        val now = System.currentTimeMillis()
+        val gapWait = minGapMs - (now - lastStartedAt)
+        val cooldownWait = blockedUntil - now
+        val waitMs = maxOf(gapWait, cooldownWait)
         if (waitMs > 0L) Thread.sleep(waitMs)
         lastStartedAt = System.currentTimeMillis()
         action()
