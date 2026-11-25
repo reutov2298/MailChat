@@ -12,11 +12,6 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class McGmailAdmin {
-    companion object {
-        private val requestMonitor = Any()
-        private var lastRequestStartedAt = 0L
-        private const val MIN_REQUEST_GAP_MS = 250L
-    }
     private val http = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
     data class Page(val ids: List<String>, val nextPageToken: String?, val estimate: Int)
@@ -25,12 +20,9 @@ class McGmailAdmin {
     data class Candidate(val message: GmailTransport.RemoteMessage, val labels: Set<String>)
 
     private fun call(url: String, token: String, method: String = "GET", body: String? = null,
-                     contentType: String = "application/json; charset=utf-8"): String = synchronized(requestMonitor) {
+                     contentType: String = "application/json; charset=utf-8"): String = McGmailRequestGate.execute(500L) {
         var attempt = 0
         while (true) {
-            val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
-            if (waitMs > 0) Thread.sleep(waitMs)
-            lastRequestStartedAt = System.currentTimeMillis()
             val builder = Request.Builder().url(url).header("Authorization", "Bearer " + token)
             when (method) {
                 "POST" -> builder.post((body ?: "").toRequestBody(contentType.toMediaType()))
@@ -47,13 +39,13 @@ class McGmailAdmin {
                 ).containsMatchIn(text)
                 val retryable = response.code == 429 || response.code == 500 ||
                     response.code == 502 || response.code == 503 || response.code == 504 || transient403
-                if (!retryable || attempt >= 5) {
+                if (!retryable || attempt >= 3) {
                     throw IllegalStateException("Gmail API " + response.code + ": " + text.take(700))
                 }
 
-                val retryAfterSeconds = response.header("Retry-After")?.toLongOrNull()
-                val exponentialDelay = minOf(30_000L, 1_000L shl attempt)
-                val delay = maxOf(exponentialDelay, (retryAfterSeconds ?: 0L) * 1_000L).coerceAtMost(60_000L)
+                val parsed = McGmailBatchError.fromPart(response.code, text)
+                val delay = McGmailRetryPolicy.delayMs(response.code, parsed.reason, parsed.message, attempt,
+                    response.header("Retry-After")?.toLongOrNull())
                 attempt++
                 Thread.sleep(delay)
             }
@@ -215,7 +207,7 @@ class McGmailAdmin {
     }
 
     private fun candidatePageOnce(token: String, pageToken: String?, max: Int): Pair<List<Candidate>, Page> {
-        val page = listIdsPage(token, query = "in:anywhere \"BEGIN MC DATA\"", pageToken = pageToken, max = max)
+        val page = listIdsPage(token, query = "in:anywhere \"BEGIN MC DATA\"", pageToken = pageToken, max = max.coerceIn(1, 10))
         if (page.ids.isEmpty()) return emptyList<Candidate>() to page
         val boundary = "mc_migrate_" + UUID.randomUUID().toString().replace("-", "")
         val body = buildString {
