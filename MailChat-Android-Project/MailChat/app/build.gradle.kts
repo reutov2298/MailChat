@@ -12,9 +12,9 @@ android {
         manifestPlaceholders["appAuthRedirectScheme"] = "com.googleusercontent.apps.150613527215-b8pfo2q526mpvgihvlj03iq9kmjpdn9i"
         minSdk = 26
         targetSdk = 35
-        // Incremented for the sender profile restoration build (27).
-        versionCode = 27
-        versionName = "1.0.8"
+        // Incremented for incoming-message auto-scroll fix (28).
+        versionCode = 28
+        versionName = "1.0.9"
         val oauthClientId = providers.gradleProperty("googleOAuthClientId").orElse(providers.environmentVariable("GOOGLE_OAUTH_CLIENT_ID")).getOrElse("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID")
         buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$oauthClientId\"")
     }
