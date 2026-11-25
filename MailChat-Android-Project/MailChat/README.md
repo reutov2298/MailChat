@@ -48,7 +48,7 @@ The OAuth client configuration and Google consent-screen verification requiremen
 1. Upload the contents of this folder to the existing repository `https://github.com/reutov2298/MailChat` (preserve the repository and branch).
 2. Open **Actions** → **Android APK** → **Run workflow**.
 3. Wait for the workflow to finish.
-4. Download artifact `MC-1.0.0-prototype-debug` and extract `app-debug.apk`.
+4. Download artifact `MC-1.2.0` and extract `app-debug.apk`.
 
 The workflow uses Gradle 8.9 and JDK 17. Application ID remains `ru.mailchat.app`. The current feature build is `1.2.0` (versionCode 14), artifact `MC-1.2.0`.
 
