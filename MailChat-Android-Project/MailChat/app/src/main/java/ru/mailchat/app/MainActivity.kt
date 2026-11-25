@@ -354,7 +354,7 @@ class MainActivity : ComponentActivity() {
                             avatarUrl = resolvedAvatar))
                     }
 
-                    repo.save(current)
+                    if (!repo.saveDurably(current)) throw IllegalStateException("Не удалось надёжно сохранить сообщение MC на устройстве")
                     archiveIds += mail.id
                     val savedChat = current.firstOrNull { it.email.equals(parsed.sender, true) }
                     logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "подписанный MC"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
