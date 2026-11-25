@@ -12,6 +12,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class McGmailAdmin {
+    companion object {
+        private val requestMonitor = Any()
+        private var lastRequestStartedAt = 0L
+        private const val MIN_REQUEST_GAP_MS = 250L
+    }
     private val http = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
     data class Page(val ids: List<String>, val nextPageToken: String?, val estimate: Int)
@@ -19,7 +24,10 @@ class McGmailAdmin {
     data class Candidate(val message: GmailTransport.RemoteMessage, val labels: Set<String>)
 
     private fun call(url: String, token: String, method: String = "GET", body: String? = null,
-                     contentType: String = "application/json; charset=utf-8"): String {
+                     contentType: String = "application/json; charset=utf-8"): String = synchronized(requestMonitor) {
+        val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
+        if (waitMs > 0) Thread.sleep(waitMs)
+        lastRequestStartedAt = System.currentTimeMillis()
         val builder = Request.Builder().url(url).header("Authorization", "Bearer " + token)
         when (method) {
             "POST" -> builder.post((body ?: "").toRequestBody(contentType.toMediaType()))
@@ -29,7 +37,7 @@ class McGmailAdmin {
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IllegalStateException("Gmail API " + response.code + ": " + text.take(700))
-            return text
+            text
         }
     }
 
