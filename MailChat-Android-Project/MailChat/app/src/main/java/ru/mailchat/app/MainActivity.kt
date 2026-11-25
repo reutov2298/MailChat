@@ -710,6 +710,7 @@ class MainActivity : ComponentActivity() {
         val listState = rememberLazyListState()
         var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
+        val imeInsets = WindowInsets.ime
         val topRefreshConnection = remember(listState, onRefresh) {
             object : NestedScrollConnection {
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
@@ -727,7 +728,7 @@ class MainActivity : ComponentActivity() {
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
         LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
         LaunchedEffect(chat.email) {
-            snapshotFlow { WindowInsets.ime.getBottom(density) }.collect {
+            snapshotFlow { imeInsets.getBottom(density) }.collect {
                 val lastIndex = chat.messages.lastIndex
                 if (lastIndex >= 0) listState.scrollToItem(lastIndex)
             }
