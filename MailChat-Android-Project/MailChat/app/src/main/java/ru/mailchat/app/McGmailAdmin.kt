@@ -20,7 +20,7 @@ class McGmailAdmin {
     private val http = OkHttpClient.Builder().callTimeout(60, TimeUnit.SECONDS).build()
 
     data class Page(val ids: List<String>, val nextPageToken: String?, val estimate: Int)
-    data class LabelStat(val id: String, val name: String, val type: String, val total: Int, val unread: Int)
+    data class LabelStat(val id: String, val name: String, val type: String, val total: Int, val unread: Int, val error: String? = null)
     data class Candidate(val message: GmailTransport.RemoteMessage, val labels: Set<String>)
 
     private fun call(url: String, token: String, method: String = "GET", body: String? = null,
@@ -105,10 +105,47 @@ class McGmailAdmin {
             val label = labels.optJSONObject(i) ?: return@mapNotNull null
             val id = label.optString("id")
             if (id.isBlank()) return@mapNotNull null
-            val detail = JSONObject(call(GmailConfig.GMAIL_API + "/labels/" + id, token))
-            LabelStat(id, label.optString("name"), label.optString("type"),
-                detail.optInt("messagesTotal"), detail.optInt("messagesUnread"))
+            val name = label.optString("name")
+            val type = label.optString("type")
+            val detail = runCatching { JSONObject(call(GmailConfig.GMAIL_API + "/labels/" + id, token)) }
+            if (detail.isSuccess) {
+                val value = detail.getOrThrow()
+                LabelStat(id, name, type, value.optInt("messagesTotal"), value.optInt("messagesUnread"))
+            } else {
+                LabelStat(id, name, type, 0, 0, detail.exceptionOrNull()?.message.orEmpty().take(160))
+            }
         }.sortedWith(compareBy<LabelStat> { !it.type.equals("system", true) }.thenBy { it.name.lowercase() })
+    }
+
+    fun messageLabelIds(token: String, ids: List<String>): Map<String, Set<String>> {
+        if (ids.isEmpty()) return emptyMap()
+        val boundary = "mc_verify_" + UUID.randomUUID().toString().replace("-", "")
+        val body = buildString {
+            ids.forEachIndexed { index, id ->
+                append("--").append(boundary).append("\\r\\nContent-Type: application/http\\r\\n")
+                append("Content-ID: <check-").append(index).append(">\\r\\n\\r\\n")
+                append("GET /gmail/v1/users/me/messages/").append(id).append("?format=metadata HTTP/1.1\\r\\n\\r\\n")
+            }
+            append("--").append(boundary).append("--\\r\\n")
+        }
+        val response = call("https://www.googleapis.com/batch/gmail/v1", token, "POST", body,
+            "multipart/mixed; boundary=" + boundary)
+        val responseBoundary = Regex("(?m)^--([^\\\\r\\\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
+            ?: throw IllegalStateException("Не найден разделитель ответа проверки меток")
+        return response.split("--" + responseBoundary).mapNotNull { part ->
+            val start = part.indexOf("HTTP/1.")
+            if (start < 0) return@mapNotNull null
+            val jsonStart = part.indexOf("{", start)
+            val jsonEnd = part.lastIndexOf("}")
+            if (jsonStart < 0 || jsonEnd < jsonStart) return@mapNotNull null
+            val item = runCatching { JSONObject(part.substring(jsonStart, jsonEnd + 1)) }.getOrNull()
+                ?: return@mapNotNull null
+            val id = item.optString("id")
+            if (id.isBlank()) return@mapNotNull null
+            val labelArray = item.optJSONArray("labelIds")
+            val labels = (0 until (labelArray?.length() ?: 0)).map { labelArray!!.optString(it) }.toSet()
+            id to labels
+        }.toMap()
     }
 
     fun batchDelete(token: String, ids: List<String>) {
