@@ -149,7 +149,7 @@ class McGmailAdmin {
             val message = GmailTransport.RemoteMessage(
                 j.optString("id"), j.optString("threadId"), from, to, subject,
                 extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L,
-                "SPAM" in labels, headers, "", labels
+                "SPAM" in labels, headers, ""
             )
             Candidate(message, labels)
         }
