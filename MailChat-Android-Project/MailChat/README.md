@@ -1,4 +1,4 @@
-# MC — Android 1.2.0
+# MC — Android prototype 1.0.0
 
 This project continues the existing `MailChat` Android project. Package name remains `ru.mailchat.app`; the GitHub Actions workflow and cloud build approach are retained.
 
@@ -6,13 +6,8 @@ This project continues the existing `MailChat` Android project. Package name rem
 
 - Kotlin + Jetpack Compose Android application shell with Russian UI.
 - Google OAuth 2.0 authorization flow using AppAuth (Authorization Code + PKCE).
-- Gmail API REST transport for profile lookup, sending, message listing, label management, archiving, and statistics.
-- A dedicated Gmail label named `MC`; incoming messages are labelled and archived only after local processing succeeds, while outgoing messages are labelled after sending.
-- One-time historical migration: candidate mail is found by the MC DATA marker and accepted only after the current protocol v2 fields and Ed25519 signature validate. Valid incoming mail is archived; valid sent mail receives the MC label. Migration checkpoints survive interruption.
-- Manual per-label folder statistics plus an exact unique-message count by paginating all Gmail message IDs, including spam and trash.
-- Confirmed permanent deletion of only messages currently carrying the MC label, with a saved ID snapshot, per-batch label revalidation, and resumable progress.
-- The restricted `https://mail.google.com/` OAuth scope is requested incrementally only when the user invokes permanent deletion; ordinary MC operation continues to use `gmail.modify`.
-- First-connection baseline: historical messages are not imported into chats; a separate signed-message migration only labels and archives verified MC messages.
+- Gmail API REST transport for profile lookup, sending, message listing, and removing the `SPAM` label.
+- First-connection baseline: existing mail is not imported; the app stores the connection time and queries only later messages.
 - Draft MC mail envelope with `X-MC-*` headers and a duplicated `BEGIN/END MC DATA` block in the visible text body.
 - Ed25519 signing and verification using Bouncy Castle. The private key and OAuth state are stored using AndroidX EncryptedSharedPreferences.
 - Incoming message validation against duplicated MIME headers, recipient, sender, timestamp and signature.
@@ -41,16 +36,16 @@ This is an early functional prototype, not the full specification. The following
 4. Add a GitHub repository **Actions variable** named `GOOGLE_OAUTH_CLIENT_ID` with the OAuth client ID. Do not add a client secret to the Android app or repository.
 5. Push the project to the existing `MailChat` repository and run the `Android APK` workflow.
 
-The OAuth client configuration and Google consent-screen verification requirements are external prerequisites. The permanent-delete scope is restricted and may require Google OAuth verification before public distribution. A successful APK build alone does not mean Gmail authorization is configured.
+The OAuth client configuration and Google consent-screen verification requirements are external prerequisites. A successful APK build alone does not mean Gmail authorization is configured.
 
 ## Build through GitHub Actions
 
 1. Upload the contents of this folder to the existing repository `https://github.com/reutov2298/MailChat` (preserve the repository and branch).
 2. Open **Actions** → **Android APK** → **Run workflow**.
 3. Wait for the workflow to finish.
-4. Download artifact `MC-1.2.0` and extract `app-debug.apk`.
+4. Download artifact `MC-1.0.0-prototype-debug` and extract `app-debug.apk`.
 
-The workflow uses Gradle 8.9 and JDK 17. Application ID remains `ru.mailchat.app`. The current feature build is `1.2.0` (versionCode 14), artifact `MC-1.2.0`.
+The workflow uses Gradle 8.9 and JDK 17. Application ID remains `ru.mailchat.app`.
 
 ## Next required engineering steps
 

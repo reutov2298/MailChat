@@ -12,9 +12,7 @@ object McProtocol {
         val sender: String,
         val recipient: String,
         val text: String,
-        val timestamp: Long,
-        val senderName: String,
-        val senderAvatarUrl: String
+        val timestamp: Long
     )
 
     data class Verification(
@@ -27,18 +25,16 @@ object McProtocol {
         val messageId: String, val chatId: String, val senderId: String,
         val sender: String, val recipient: String, val version: String,
         val messageType: String, val timestamp: String, val sequence: String,
-        val keyId: String, val publicKey: String, val text: String,
-        val senderName: String, val senderAvatarUrl: String
+        val keyId: String, val publicKey: String, val text: String
     )
 
     fun normalizeText(value: String): String =
         value.replace("\r\n", "\n").replace('\r', '\n').trimEnd('\n')
 
     fun canonical(input: CanonicalInput): String = listOf(
-        "2", input.messageId, input.chatId, input.senderId, input.sender,
+        "1", input.messageId, input.chatId, input.senderId, input.sender,
         input.recipient, input.version, input.messageType, input.timestamp,
-        input.sequence, input.keyId, input.publicKey, input.senderName,
-        input.senderAvatarUrl, normalizeText(input.text)
+        input.sequence, input.keyId, input.publicKey, normalizeText(input.text)
     ).joinToString("\n")
 
     private fun sha256(bytes: ByteArray): String =
@@ -47,11 +43,10 @@ object McProtocol {
 
     fun signatureDiagnostics(role: String, input: CanonicalInput, signature: String): List<String> {
         val fields = linkedMapOf(
-            "protocol" to "2", "messageId" to input.messageId, "chatId" to input.chatId,
+            "protocol" to "1", "messageId" to input.messageId, "chatId" to input.chatId,
             "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
             "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
             "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
-            "senderName" to input.senderName, "senderAvatarUrl" to input.senderAvatarUrl,
             "text" to normalizeText(input.text)
         )
         val bytes = canonical(input).toByteArray(Charsets.UTF_8)
@@ -152,10 +147,8 @@ object McProtocol {
                 }
             }
 
-            val protocolVersion = values["x-mc-protocol"]?.trim().orEmpty()
-            if (protocolVersion != "2") {
-                val visibleVersion = protocolVersion.take(32).replace(Regex("[^A-Za-z0-9._-]"), "?")
-                return Verification(null, "Неподдерживаемая версия протокола: [${visibleVersion}]")
+            if (values["x-mc-protocol"] != "1") {
+                return Verification(null, "Неподдерживаемая версия протокола")
             }
 
             if (values["x-mc-signature-algorithm"] != "Ed25519") {
@@ -185,13 +178,14 @@ object McProtocol {
                 )
             )
 
-            // The only supported format places the signed message text before MC DATA.
-            // Remove exactly the single CRLF inserted as the structural separator by the sender.
-            var rawText = mail.body.substring(0, start)
-            if (rawText.endsWith("\r\n")) {
-                rawText = rawText.dropLast(2)
-            } else if (rawText.endsWith("\n") || rawText.endsWith("\r")) {
-                rawText = rawText.dropLast(1)
+            // Strip only the MIME separator; preserve leading user newlines.
+            var rawText = mail.body.substring(end + finish.length)
+            rawText = when {
+                rawText.startsWith("\r\n\r\n") -> rawText.substring(4)
+                rawText.startsWith("\n\n") -> rawText.substring(2)
+                rawText.startsWith("\r\n") -> rawText.substring(2)
+                rawText.startsWith("\n") -> rawText.substring(1)
+                else -> rawText
             }
             val text = normalizeText(rawText)
 
@@ -202,22 +196,11 @@ object McProtocol {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
-            fun decodeProfileField(key: String): String {
-                val encoded = values.getValue(key)
-                require(encoded.length <= 1100) { "Profile field too large" }
-                return String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
-            }
-            val senderName = decodeProfileField("x-mc-sender-name").replace(Regex("[\\r\\n]+"), " ").trim().take(200)
-            val senderAvatarUrl = decodeProfileField("x-mc-sender-avatar").trim()
-            if (senderAvatarUrl.isNotBlank() && (!senderAvatarUrl.startsWith("https://") || senderAvatarUrl.length > 700)) {
-                return Verification(null, "Недопустимый адрес аватара")
-            }
             val input = CanonicalInput(
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
                 values.getValue("x-mc-version"), values.getValue("x-mc-message-type"),
                 timestamp.toString(), values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
-                senderName, senderAvatarUrl
+                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
             val signature = values.getValue("x-mc-signature")
@@ -226,7 +209,7 @@ object McProtocol {
                 return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
             }
 
-            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, senderName, senderAvatarUrl), null, diagnostics)
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }
