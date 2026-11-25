@@ -560,15 +560,62 @@ class MainActivity : ComponentActivity() {
                     selected != null -> {
                         val email = selected!!
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
-                        Conversation(chat, Modifier.padding(padding), isSyncing = syncInProgress, onRefresh = { syncNow(source = "жест обновления переписки") }, onSend = { body ->
-                            val outgoing = McMessage(chatId = email.lowercase(), sender = accountEmail, recipient = email, text = body, incoming = false, state = DeliveryState.QUEUED)
-                            chats = (chats.filterNot { it.email.equals(email, true) } + chat.copy(messages = chat.messages + outgoing)).sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
-                            repo.save(chats)
-                            sendMessage(email, body) { error ->
-                                val updated = chats.map { c -> if (c.email.equals(email, true)) c.copy(messages = c.messages.map { m -> if (m.id == outgoing.id) m.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED) else m }) else c }
-                                chats = updated; repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
+                        Conversation(
+                            chat, Modifier.padding(padding), isSyncing = syncInProgress,
+                            onRefresh = { syncNow(source = "жест обновления переписки") },
+                            onSend = { body, editing ->
+                                val outgoing = if (editing == null) {
+                                    McMessage(
+                                        chatId = email.lowercase(), sender = accountEmail, recipient = email,
+                                        text = body, incoming = false, state = DeliveryState.QUEUED,
+                                        sequence = repo.nextSequence(email.lowercase(), accountEmail)
+                                    )
+                                } else editing.copy(text = body, version = editing.version + 1L, deleted = false, state = DeliveryState.QUEUED)
+                                val updatedChats = chats.map { currentChat ->
+                                    if (currentChat.email.equals(email, true)) {
+                                        val messages = if (editing == null) currentChat.messages + outgoing
+                                        else currentChat.messages.map { if (it.id == editing.id) outgoing else it }
+                                        currentChat.copy(messages = repo.orderedMessages(messages))
+                                    } else currentChat
+                                }
+                                chats = if (updatedChats.any { it.email.equals(email, true) }) updatedChats
+                                    else updatedChats + McChat(email, messages = listOf(outgoing))
+                                repo.save(chats)
+                                sendMessage(email, outgoing, if (editing == null) "text" else "edit") { error ->
+                                    chats = chats.map { currentChat ->
+                                        if (currentChat.email.equals(email, true)) currentChat.copy(
+                                            messages = currentChat.messages.map { item ->
+                                                if (item.id == outgoing.id && item.version == outgoing.version)
+                                                    item.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED)
+                                                else item
+                                            }
+                                        ) else currentChat
+                                    }
+                                    repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
+                                }
+                            },
+                            onDeleteMessage = { target ->
+                                val deleted = target.copy(text = "", version = target.version + 1L, deleted = true, state = DeliveryState.QUEUED)
+                                chats = chats.map { currentChat ->
+                                    if (currentChat.email.equals(email, true)) currentChat.copy(
+                                        messages = repo.orderedMessages(currentChat.messages.map { if (it.id == target.id) deleted else it })
+                                    ) else currentChat
+                                }
+                                repo.save(chats)
+                                sendMessage(email, deleted, "delete") { error ->
+                                    chats = chats.map { currentChat ->
+                                        if (currentChat.email.equals(email, true)) currentChat.copy(
+                                            messages = currentChat.messages.map { item ->
+                                                if (item.id == deleted.id && item.version == deleted.version)
+                                                    item.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED)
+                                                else item
+                                            }
+                                        ) else currentChat
+                                    }
+                                    repo.save(chats); status = error ?: "Сообщение удалено"; authChanged++
+                                }
                             }
-                        })
+                        )
                     }
                     else -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         if (token == null) {
