@@ -247,8 +247,7 @@ class MainActivity : ComponentActivity() {
         logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
         var result = "Проверка завершена"
-            try {                logger.add("Запрос списка входящих сообщений Gmail")
-                val incoming = withContext(Dispatchers.IO) {
+            try {                logger.add("Запрос списка входящих сообщений Gmail")                val incoming = withContext(Dispatchers.IO) {
                     gmail.list(t, "after:$since {in:inbox in:spam}", 50)
                 }
                 logger.add("Gmail вернул сообщений: ${incoming.size}")
@@ -497,8 +496,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Button(
                                 onClick = {                                    syncNow {
-                                        status = it
-                                        logText = logger.read()
+                                        status = it                                        logText = logger.read()
                                         logSize = logger.sizeBytes()
                                     }
                                 },
@@ -747,8 +745,7 @@ class MainActivity : ComponentActivity() {
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
                         OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
-                    }
-                }, confirmButton = { TextButton(onClick = {
+                    }                }, confirmButton = { TextButton(onClick = {
                     if (email.contains("@")) {
                         val normalized = email.trim().lowercase()
                         val manualName = displayName.trim()
@@ -828,7 +825,7 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(chat.messages.filter { it.incoming }.map { it.id }.toSet())
         }
         LaunchedEffect(chat.email) { if (orderedMessages.isNotEmpty()) listState.scrollToItem(orderedMessages.lastIndex) }
-        LaunchedEffect(chat.email) {
+        LaunchedEffect(chat.email, orderedMessages.size) {
             snapshotFlow { imeInsets.getBottom(density) }.collect {
                 val lastIndex = orderedMessages.lastIndex
                 if (lastIndex >= 0) listState.scrollToItem(lastIndex)
@@ -997,8 +994,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-        actionMessage?.let { selectedMessage ->
+        }        actionMessage?.let { selectedMessage ->
             AlertDialog(
                 onDismissRequest = { actionMessage = null },
                 title = { Text("Сообщение") },
