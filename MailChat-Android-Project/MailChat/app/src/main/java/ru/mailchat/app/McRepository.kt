@@ -41,6 +41,12 @@ class McRepository(context: Context) {
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
     fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
+    fun ownProfileName(): String = prefs.getString("own_profile_name", "").orEmpty()
+    fun ownProfileAvatar(): String = prefs.getString("own_profile_avatar", "").orEmpty()
+    fun setOwnProfile(name: String?, avatar: String?) {
+        prefs.edit().putString("own_profile_name", name.orEmpty().take(200))
+            .putString("own_profile_avatar", avatar.orEmpty().take(700)).apply()
+    }
 
     fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 60)
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 180)
