@@ -189,14 +189,23 @@ class McGmailAdmin {
             "multipart/mixed; boundary=" + boundary)
         val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Не найден разделитель ответа Gmail batch")
+        var fallbackIndex = 0
         val candidates = response.split("--" + responseBoundary).mapNotNull { part ->
             val start = part.indexOf("HTTP/1.")
             if (start < 0) return@mapNotNull null
+            val requestedId = page.ids.getOrNull(fallbackIndex++)
+                ?: throw IllegalStateException("Не удалось сопоставить ответ Gmail с ID письма")
+            val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
+                ?: throw IllegalStateException("Не удалось определить HTTP-статус письма при миграции")
+            if (status == 404) {
+                val missingMessage = GmailTransport.RemoteMessage(requestedId, null, "", "", "", "", 0L, false, emptyMap())
+                return@mapNotNull Candidate(missingMessage, emptySet())
+            }
+            if (status !in 200..299) throw IllegalStateException("Gmail batch migration вернул HTTP " + status)
             val jsonStart = part.indexOf("{", start)
             val jsonEnd = part.lastIndexOf("}")
-            if (jsonStart < 0 || jsonEnd < jsonStart) return@mapNotNull null
-            val j = runCatching { JSONObject(part.substring(jsonStart, jsonEnd + 1)) }.getOrNull()
-                ?: return@mapNotNull null
+            if (jsonStart < 0 || jsonEnd < jsonStart) throw IllegalStateException("Пустой ответ Gmail при миграции")
+            val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
             val payload = j.optJSONObject("payload")
             val headers = linkedMapOf<String, String>()
             val headerArray = payload?.optJSONArray("headers")
