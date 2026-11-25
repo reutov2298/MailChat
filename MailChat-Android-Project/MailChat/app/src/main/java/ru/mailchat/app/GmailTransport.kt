@@ -12,14 +12,6 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class GmailTransport {
-    companion object {
-        // Serialize Gmail API calls across all transport instances and keep a
-        // minimum gap between request starts to prevent bursts from sync/send/worker.
-        private val requestMonitor = Any()
-        private var lastRequestStartedAt = 0L
-        private const val MIN_REQUEST_GAP_MS = 500L
-    }
-
     var onRequestStarted: (() -> Unit)? = null
     var onServerRequest: ((String) -> Unit)? = null
     var onDiagnostic: ((String) -> Unit)? = null
@@ -31,10 +23,7 @@ class GmailTransport {
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String =
-        synchronized(requestMonitor) {
-            val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
-            if (waitMs > 0) Thread.sleep(waitMs)
-            lastRequestStartedAt = System.currentTimeMillis()
+        McGmailRequestGate.execute(500L) {
 
             // The callback/sound fires only when this request is actually about to start.
             onRequestStarted?.invoke()
@@ -159,9 +148,10 @@ class GmailTransport {
             } catch (error: IllegalStateException) {
                 val status = Regex("Gmail batch: письмо \\d+ вернуло HTTP (\\d{3})")
                     .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
-                if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 5) throw error
-                val delayMs = minOf(30_000L, 1_000L shl attempt)
-                onDiagnostic?.invoke("Gmail batch: временная ошибка HTTP ${status ?: "?"}; повтор всего пакета через ${delayMs / 1000} сек.")
+                if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 3) throw error
+                val delayMs = McGmailBatchError.retryDelayMsException(error.message, attempt)
+                onDiagnostic?.invoke("Gmail batch: временная ошибка HTTP ${status ?: "?"}; повтор после паузы ${delayMs / 1000} сек.")
+                McGmailRequestGate.deferFor(delayMs)
                 Thread.sleep(delayMs)
                 attempt++
             }
@@ -173,70 +163,124 @@ class GmailTransport {
         val q = URLEncoder.encode(query, "UTF-8")
         val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&includeSpamTrash=true&q=$q", token))
         val ids = root.optJSONArray("messages") ?: return emptyList()
-        if (ids.length() == 0) return emptyList()
         val messageIds = (0 until ids.length()).mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
+        if (messageIds.isEmpty()) return emptyList()
+
+        // First read headers and labels only. Full bodies are fetched only for probable MC messages.
+        val metadata = linkedMapOf<Int, JSONObject>()
+        messageIds.indices.chunked(10).forEach { indexes ->
+            val chunk = indexes.map { messageIds[it] }
+            batchGetMessages(token, chunk, "metadata", indexes.first()).forEach { (localIndex, item) -> metadata[indexes[localIndex]] = item }
+        }
+
+        val candidates = mutableSetOf<Int>()
+        val result = arrayOfNulls<RemoteMessage>(messageIds.size)
+        metadata.forEach { (index, item) ->
+            val payload = item.optJSONObject("payload")
+            val headers = readHeaders(payload)
+            val probableMc = headers.keys.any { it.startsWith("x-mc-") } ||
+                headers["subject"].orEmpty().startsWith("[MC]", true)
+            if (probableMc) candidates += index
+            result[index] = remoteMessage(item, messageIds[index], headers, body = "")
+        }
+
+        candidates.sorted().chunked(10).forEach { indexes ->
+            val chunk = indexes.map { messageIds[it] }
+            val full = batchGetMessages(token, chunk, "full", indexes.first())
+            indexes.forEachIndexed { offset, index ->
+                val item = full[offset] ?: throw IllegalStateException("Gmail batch не вернул полное письмо с индексом $index")
+                val payload = item.optJSONObject("payload")
+                val headers = readHeaders(payload)
+                result[index] = remoteMessage(item, messageIds[index], headers, extractBody(payload))
+            }
+        }
+
+        onDiagnostic?.invoke("Gmail batch: проверено писем=${messageIds.size}, полное содержимое запрошено=${candidates.size}, размер пакета=10")
+        return result.mapIndexed { index, message ->
+            message ?: throw IllegalStateException("Gmail metadata не вернул письмо с индексом $index")
+        }
+    }
+
+    private fun batchGetMessages(
+        token: String,
+        ids: List<String>,
+        format: String,
+        indexOffset: Int
+    ): Map<Int, JSONObject> {
+        if (ids.isEmpty()) return emptyMap()
         val boundary = "mc_batch_${UUID.randomUUID().toString().replace("-", "")}"
-        val batchBody = buildString {
-            messageIds.forEachIndexed { index, id ->
+        val body = buildString {
+            ids.forEachIndexed { index, id ->
                 append("--").append(boundary).append("\r\nContent-Type: application/http\r\n")
                 append("Content-ID: <mc-").append(index).append(">\r\n\r\n")
-                append("GET /gmail/v1/users/me/messages/").append(id).append("?format=full HTTP/1.1\r\n\r\n")
+                append("GET /gmail/v1/users/me/messages/").append(id)
+                    .append("?format=").append(format).append(" HTTP/1.1\r\n\r\n")
             }
             append("--").append(boundary).append("--\r\n")
         }
-        val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", batchBody, "multipart/mixed; boundary=$boundary")
+        val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", body,
+            "multipart/mixed; boundary=$boundary")
         val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Gmail batch response has no boundary")
-        val resultByIndex = linkedMapOf<Int, RemoteMessage>()
+        val result = linkedMapOf<Int, JSONObject>()
         var fallbackIndex = 0
         response.split("--$responseBoundary").forEach { part ->
             val httpStart = part.indexOf("HTTP/1.")
             if (httpStart < 0) return@forEach
-            val requestIndex = Regex("(?i)Content-ID:\\s*<[^>]*mc-(\\d+)>")
+            val localIndex = Regex("(?i)Content-ID:\\s*<[^>]*mc-(\\d+)>")
                 .find(part)?.groupValues?.get(1)?.toIntOrNull() ?: fallbackIndex
             fallbackIndex++
-            val requestedId = messageIds.getOrNull(requestIndex)
-                ?: throw IllegalStateException("Не удалось сопоставить ответ Gmail с запрошенным письмом")
             val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
                 ?: throw IllegalStateException("Не удалось определить HTTP-статус письма в Gmail batch")
             if (status !in 200..299) {
                 val failure = McGmailBatchError.fromPart(status, part)
                 val detail = failure.diagnostic()
-                onDiagnostic?.invoke("Gmail batch: письмо $requestIndex HTTP $status; $detail")
-                throw IllegalStateException("Gmail batch: письмо $requestIndex вернуло HTTP $status ($detail)")
+                onDiagnostic?.invoke("Gmail batch: письмо ${indexOffset + localIndex} HTTP $status; $detail")
+                throw IllegalStateException("Gmail batch: письмо ${indexOffset + localIndex} вернуло HTTP $status ($detail)")
             }
             val jsonStart = part.indexOf("{", httpStart)
             val jsonEnd = part.lastIndexOf("}")
             if (jsonStart < 0 || jsonEnd < jsonStart) {
-                throw IllegalStateException("Gmail batch: пустой ответ для письма $requestIndex")
+                throw IllegalStateException("Gmail batch: пустой ответ для письма ${indexOffset + localIndex}")
             }
-            val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
-            val returnedId = j.optString("id").takeIf { it.isNotBlank() }
-            if (returnedId != null && returnedId != requestedId) {
+            val item = JSONObject(part.substring(jsonStart, jsonEnd + 1))
+            val requestedId = ids.getOrNull(localIndex)
+                ?: throw IllegalStateException("Не удалось сопоставить ответ Gmail с запрошенным письмом")
+            val returnedId = item.optString("id")
+            if (returnedId.isNotBlank() && returnedId != requestedId) {
                 throw IllegalStateException("Gmail batch: ID ответа не совпадает с запрошенным письмом")
             }
-            val payload = j.optJSONObject("payload")
-            val headers = payload?.optJSONArray("headers")
-            var from = ""; var to = ""; var subject = ""
-            val headerMap = linkedMapOf<String, String>()
-            if (headers != null) for (i in 0 until headers.length()) {
-                val h = headers.getJSONObject(i); val hn = h.optString("name"); val hv = h.optString("value")
-                headerMap[hn.lowercase()] = hv
-                when (hn.lowercase()) { "from" -> from = hv; "to" -> to = hv; "subject" -> subject = hv }
-            }
-            val labels = j.optJSONArray("labelIds")
-            val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
-            resultByIndex[requestIndex] = RemoteMessage(requestedId, j.optString("threadId"), from, to, subject,
-                extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap,
-                parseSenderDisplayName(from))
+            result[localIndex] = item
         }
-        onDiagnostic?.invoke("Gmail batch: запрошено писем=${messageIds.size}, получено=${resultByIndex.size}")
-        if (resultByIndex.size != messageIds.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
-        return messageIds.indices.map { index ->
-            resultByIndex[index] ?: throw IllegalStateException("Gmail batch не вернул письмо с индексом $index")
-        }
+        if (result.size != ids.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
+        return result
     }
 
+    private fun readHeaders(payload: JSONObject?): Map<String, String> {
+        val headers = linkedMapOf<String, String>()
+        val items = payload?.optJSONArray("headers") ?: return headers
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: continue
+            headers[item.optString("name").lowercase()] = item.optString("value")
+        }
+        return headers
+    }
+
+    private fun remoteMessage(
+        item: JSONObject,
+        requestedId: String,
+        headers: Map<String, String>,
+        body: String
+    ): RemoteMessage {
+        val labels = item.optJSONArray("labelIds")
+        val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
+        return RemoteMessage(
+            requestedId, item.optString("threadId"), headers["from"].orEmpty(),
+            headers["to"].orEmpty(), headers["subject"].orEmpty(), body,
+            item.optString("internalDate").toLongOrNull() ?: 0L, spam, headers,
+            parseSenderDisplayName(headers["from"].orEmpty())
+        )
+    }
 
     private fun parseSenderDisplayName(from: String): String {
         val normalized = from.replace(Regex("\\s+"), " ").trim()
