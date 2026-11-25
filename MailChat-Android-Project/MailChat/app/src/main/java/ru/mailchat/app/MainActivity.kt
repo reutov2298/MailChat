@@ -307,7 +307,7 @@ class MainActivity : ComponentActivity() {
                             title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
                             senderName = resolvedName ?: existing.senderName,
                             avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
-                            messages = repo.orderedMessages(existing.messages + message)
+                            messages = if (existingIndex >= 0) existing.messages else repo.orderedMessages(existing.messages + message)
                         )
                     } else {
                         current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
@@ -821,7 +821,7 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             modifier = Modifier
-                                .fillMaxWidth(if (message.deleted) 0.72f else 1f)
+                                .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
                                 .pointerInput(message.id, message.deleted, message.incoming) {
                                     detectTapGestures(onLongPress = {
                                         if (!message.incoming && !message.deleted) actionMessage = message
