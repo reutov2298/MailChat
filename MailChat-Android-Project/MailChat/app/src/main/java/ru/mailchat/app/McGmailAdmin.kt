@@ -91,7 +91,7 @@ class McGmailAdmin {
         var total = 0
         var pageToken: String? = null
         do {
-            val page = listIdsPage(token, query = "in:anywhere", pageToken = pageToken)
+            val page = listIdsPage(token, pageToken = pageToken)
             total += page.ids.size
             pageToken = page.nextPageToken
         } while (pageToken != null)
