@@ -645,11 +645,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             Column(Modifier.fillMaxSize()) {
-                                if (syncInProgress || bottomPullDistance > 0f) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                                    if (syncInProgress) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    else Text("Потяните вниз для проверки новых сообщений", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    if (syncInProgress) Spacer(Modifier.width(8.dp))
-                                    if (syncInProgress) Text("Проверяем почту...", fontSize = 12.sp)
+                                if (syncInProgress) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Проверяем почту...", fontSize = 12.sp)
                                 }
                                 LazyColumn(state = chatListState, modifier = Modifier.weight(1f).nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) {
                                 items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
@@ -795,7 +794,9 @@ class MainActivity : ComponentActivity() {
                 // Observe the upward pull before LazyColumn consumes it.
                 // This keeps the refresh gesture available while the keyboard is open.
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                    if (!listState.canScrollBackward && available.y < 0f) {
+                    // Messages are ordered oldest-to-newest and the chat opens at the newest end.
+                    // An upward swipe at that end is available only when canScrollForward is false.
+                    if (!listState.canScrollForward && available.y < 0f) {
                         topPullDistance = (topPullDistance - available.y).coerceAtMost(with(density) { 120.dp.toPx() })
                     } else if (available.y != 0f) {
                         topPullDistance = 0f
@@ -803,7 +804,7 @@ class MainActivity : ComponentActivity() {
                     return Offset.Zero
                 }
                 override suspend fun onPreFling(available: Velocity): Velocity {
-                    if (topPullDistance >= with(density) { 72.dp.toPx() } && !listState.canScrollBackward) { topPullDistance = 0f; onRefresh() }
+                    if (topPullDistance >= with(density) { 72.dp.toPx() } && !listState.canScrollForward) { topPullDistance = 0f; onRefresh() }
                     else topPullDistance = 0f
                     return Velocity.Zero
                 }
@@ -889,7 +890,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             }
-            if (isSyncing || topPullDistance > 0f) {
+            if (isSyncing) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                     color = Navy.copy(alpha = 0.85f),
@@ -901,12 +902,9 @@ class MainActivity : ComponentActivity() {
                         horizontalArrangement = Arrangement.Center,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        if (isSyncing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        else Text("Потяните вверх для проверки новых сообщений", fontSize = 12.sp, color = Color.White)
-                        if (isSyncing) {
-                            Spacer(Modifier.width(8.dp))
-                            Text("Проверяем почту...", fontSize = 12.sp, color = Color.White)
-                        }
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Проверяем почту...", fontSize = 12.sp, color = Color.White)
                     }
                 }
             }
