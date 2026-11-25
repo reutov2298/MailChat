@@ -247,7 +247,9 @@ class MainActivity : ComponentActivity() {
         logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
         var result = "Проверка завершена"
-            try {                logger.add("Запрос списка входящих сообщений Gmail")                val incoming = withContext(Dispatchers.IO) {
+            try {
+                logger.add("Запрос списка входящих сообщений Gmail")
+                val incoming = withContext(Dispatchers.IO) {
                     gmail.list(t, "after:$since {in:inbox in:spam}", 50)
                 }
                 logger.add("Gmail вернул сообщений: ${incoming.size}")
@@ -495,8 +497,10 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Button(
-                                onClick = {                                    syncNow {
-                                        status = it                                        logText = logger.read()
+                                onClick = {
+                                    syncNow {
+                                        status = it
+                                        logText = logger.read()
                                         logSize = logger.sizeBytes()
                                     }
                                 },
@@ -743,9 +747,11 @@ class MainActivity : ComponentActivity() {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
                         OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
-                    }                }, confirmButton = { TextButton(onClick = {
+                    }
+                }, confirmButton = { TextButton(onClick = {
                     if (email.contains("@")) {
                         val normalized = email.trim().lowercase()
                         val manualName = displayName.trim()
@@ -833,7 +839,7 @@ class MainActivity : ComponentActivity() {
         }
         LaunchedEffect(chat.email, orderedMessages.map { it.id to it.incoming }) {
             val currentIncomingIds = orderedMessages.filter { it.incoming }.map { it.id }.toSet()
-            val newlyReceived = orderedMessages.withIndex().filter { (index, message) ->
+            val newlyReceived = orderedMessages.withIndex().filter { (_, message) ->
                 message.incoming && !message.deleted && message.id !in knownIncomingMessageIds
             }
             knownIncomingMessageIds = currentIncomingIds
@@ -994,7 +1000,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-        }        actionMessage?.let { selectedMessage ->
+        }
+        actionMessage?.let { selectedMessage ->
             AlertDialog(
                 onDismissRequest = { actionMessage = null },
                 title = { Text("Сообщение") },
@@ -1011,7 +1018,8 @@ class MainActivity : ComponentActivity() {
                             actionMessage = null
                         }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
                     }
-                },                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
+                },
+                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
             )
         }
     }
