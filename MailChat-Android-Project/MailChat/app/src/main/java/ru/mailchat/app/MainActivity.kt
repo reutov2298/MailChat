@@ -840,7 +840,20 @@ class MainActivity : ComponentActivity() {
                                         "Безвозвратно удалено писем MC: " + result.deleted
                                     }
                                     deleteSnapshot = emptyList()
-                                    mailStatsText = ""
+                                    if (!result.changed) {
+                                        runCatching {
+                                            val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
+                                            mailStatsText = buildString {
+                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                stats.labels.forEach { label ->
+                                                    append(label.name).append(": ").append(label.total)
+                                                        .append(" (непрочитанных: ").append(label.unread).append(")\n")
+                                                }
+                                            }
+                                        }.onFailure {
+                                            mailStatsText = "Удаление выполнено; обновить статистику не удалось: " + it.message.orEmpty().take(160)
+                                        }
+                                    }
                                 } catch (e: Exception) {
                                     mailDeleteProgress = "Удаление прервано; прогресс сохранён: " + e.message.orEmpty().take(180)
                                     logger.error("Ошибка безвозвратного удаления MC: " + e.message.orEmpty().take(200))
