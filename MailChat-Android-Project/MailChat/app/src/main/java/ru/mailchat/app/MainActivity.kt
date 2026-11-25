@@ -199,18 +199,42 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val syncQueue = mutableListOf<Pair<String, (String) -> Unit>>()
+    private var syncQueueDraining = false
+
     private fun syncNow(source: String = "ручная", done: (String) -> Unit = {}) {
-        if (syncInProgress) {
-            done("Проверка уже выполняется")
+        if (token == null) {
+            done("Нет подключения Gmail")
             return
         }
-        val t = token ?: run { done("Нет подключения Gmail"); return }
-        if (!repo.acquireSyncLock()) { done("Проверка уже выполняется"); return }
-        val since = repo.baseline().coerceAtLeast(1L)
+        syncQueue.add(source to done)
+        if (syncQueueDraining) return
+
+        syncQueueDraining = true
         syncInProgress = true
+        lifecycleScope.launch {
+            try {
+                while (syncQueue.isNotEmpty()) {
+                    val request = syncQueue.removeAt(0)
+                    performSync(request.first, request.second)
+                }
+            } finally {
+                syncQueueDraining = false
+                syncInProgress = false
+            }
+        }
+    }
+
+    private suspend fun performSync(source: String, done: (String) -> Unit) {
+        val t = token ?: run { done("Нет подключения Gmail"); return }
+        while (!repo.acquireSyncLock()) {
+            delay(500)
+            if (token == null) { done("Нет подключения Gmail"); return }
+        }
+        val since = repo.baseline().coerceAtLeast(1L)
         logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
-        lifecycleScope.launch {
+        var result = "Проверка завершена"
             var result = "Проверка завершена"
             try {
                 logger.add("Запрос списка входящих сообщений Gmail")
@@ -333,13 +357,10 @@ class MainActivity : ComponentActivity() {
                 logger.error("Ошибка синхронизации: ${e.javaClass.simpleName}: ${result.take(250)}")
             } finally {
                 repo.releaseSyncLock()
-                syncInProgress = false
                 authChanged++
                 done(result)
             }
-        }
     }
-
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable private fun McApp() {
         var selected by remember {
@@ -633,24 +654,19 @@ class MainActivity : ComponentActivity() {
                             val bottomRefreshConnection = remember(chatListState) {
                                 object : NestedScrollConnection {
                                     override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                                        if (!chatListState.canScrollForward && available.y > 0f) bottomPullDistance = (bottomPullDistance + available.y).coerceAtMost(with(density) { 120.dp.toPx() })
+                                        if (!chatListState.canScrollBackward && available.y > 0f) bottomPullDistance = (bottomPullDistance + available.y).coerceAtMost(with(density) { 120.dp.toPx() })
                                         else if (available.y != 0f) bottomPullDistance = 0f
                                         return Offset.Zero
                                     }
                                     override suspend fun onPreFling(available: Velocity): Velocity {
-                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollForward) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
+                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollBackward) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
                                         else bottomPullDistance = 0f
                                         return Velocity.Zero
                                     }
                                 }
                             }
-                            Column(Modifier.fillMaxSize()) {
-                                if (syncInProgress) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Проверяем почту...", fontSize = 12.sp)
-                                }
-                                LazyColumn(state = chatListState, modifier = Modifier.weight(1f).nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) {
+                            Box(Modifier.fillMaxSize()) {
+                                LazyColumn(state = chatListState, modifier = Modifier.fillMaxSize().nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) {
                                 items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
                                     val dragOffset = remember(chat.email) { mutableFloatStateOf(0f) }
                                     Card(
@@ -699,6 +715,24 @@ class MainActivity : ComponentActivity() {
                                             Column(horizontalAlignment = Alignment.End) {
                                                 Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
                                             }
+                                        }
+                                    }
+                                }
+                                if (syncInProgress) {
+                                    Surface(
+                                        modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                                        color = Navy.copy(alpha = 0.85f),
+                                        shape = RoundedCornerShape(20.dp),
+                                        shadowElevation = 4.dp
+                                    ) {
+                                        Row(
+                                            Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            horizontalArrangement = Arrangement.Center,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Проверяем почту...", fontSize = 12.sp, color = Color.White)
                                         }
                                     }
                                 }
