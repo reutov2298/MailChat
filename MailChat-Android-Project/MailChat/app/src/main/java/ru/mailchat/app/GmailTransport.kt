@@ -151,6 +151,7 @@ class GmailTransport {
                 if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 3) throw error
                 val delayMs = McGmailBatchError.retryDelayMsException(error.message, attempt)
                 onDiagnostic?.invoke("Gmail batch: временная ошибка HTTP ${status ?: "?"}; повтор после паузы ${delayMs / 1000} сек.")
+                McGmailRequestGate.deferFor(delayMs)
                 Thread.sleep(delayMs)
                 attempt++
             }
