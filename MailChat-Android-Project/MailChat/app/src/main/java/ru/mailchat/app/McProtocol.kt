@@ -223,7 +223,7 @@ object McProtocol {
                 if (decoded.toByteArray(Charsets.UTF_8).size > maxBytes) throw IllegalArgumentException("Профильное поле слишком длинное")
                 return decoded
             }
-            val senderName = if (protocol == "3") decodeProfileHeader("x-mc-sender-name", 200) else ""
+            val senderName = if (protocol == "3") decodeProfileHeader("x-mc-sender-name", 800).take(200) else ""
             val senderAvatar = if (protocol == "3") decodeProfileHeader("x-mc-sender-avatar", 700).also {
                 if (it.isNotBlank() && !it.startsWith("https://")) throw IllegalArgumentException("Недопустимый URL аватара")
             } else ""
