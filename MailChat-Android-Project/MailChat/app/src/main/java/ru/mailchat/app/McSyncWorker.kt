@@ -94,7 +94,7 @@ class McSyncWorker(
                 } else {
                     chats.add(McChat(parsed.sender, title = mail.senderName.ifBlank { parsed.sender }, messages = listOf(message), senderName = mail.senderName.takeIf { it.isNotBlank() }))
                 }
-                repo.save(chats)
+                if (!repo.saveDurably(chats)) throw IllegalStateException("Не удалось надёжно сохранить сообщение MC на устройстве")
                 archiveIds += mail.id
                 accepted++
             }
