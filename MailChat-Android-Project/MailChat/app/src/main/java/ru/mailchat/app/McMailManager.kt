@@ -109,4 +109,3 @@ class McMailManager(
         return DeleteResult(ids.size)
     }
 }
-}
