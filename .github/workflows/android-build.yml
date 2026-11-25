@@ -1,5 +1,6 @@
 name: MailChat Android APK
 
+# Build 22: verify package version and permanent signing identity.
 on:
   workflow_dispatch:
   pull_request:
