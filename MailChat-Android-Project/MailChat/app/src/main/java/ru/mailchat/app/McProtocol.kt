@@ -47,7 +47,7 @@ object McProtocol {
 
     fun signatureDiagnostics(role: String, input: CanonicalInput, signature: String): List<String> {
         val fields = linkedMapOf(
-            "protocol" to "1", "messageId" to input.messageId, "chatId" to input.chatId,
+            "protocol" to "2", "messageId" to input.messageId, "chatId" to input.chatId,
             "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
             "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
             "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
