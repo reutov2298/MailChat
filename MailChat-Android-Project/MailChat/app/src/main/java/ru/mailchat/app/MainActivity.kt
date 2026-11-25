@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -172,16 +173,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun sendMessage(to: String, text: String, done: (String?) -> Unit) {
+    private fun sendMessage(to: String, message: McMessage, messageType: String, done: (String?) -> Unit) {
         val t = token ?: run { done("Сначала подключите Gmail"); return }
         lifecycleScope.launch {
             try {
-                logger.add("Начата отправка сообщения получателю: $to")
+                logger.add("Начата отправка события $messageType получателю: $to")
                 val id = withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
-                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey()) { bytes -> McCrypto.sign(pair, bytes) }
+                    gmail.send(
+                        t, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
+                        message.chatId, identity.publicKey(),
+                        messageId = message.id, sequence = message.sequence,
+                        messageVersion = message.version, messageType = messageType,
+                        messageTimestamp = message.timestamp
+                    ) { bytes -> McCrypto.sign(pair, bytes) }
                 }
-                logger.add("Сообщение отправлено в Gmail: $id")
+                logger.add("Событие MC отправлено в Gmail: $id; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
                 done(null)
             } catch (e: Exception) {
                 logger.error("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
