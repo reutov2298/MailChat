@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -28,6 +29,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.draw.clip
 import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
+import coil.compose.rememberAsyncImagePainter
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -71,6 +74,41 @@ import kotlin.math.ceil
 
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
+
+private fun profileInitials(name: String): String {
+    val normalized = name.substringBefore('@').replace(Regex("[._-]+"), " ").trim()
+    val parts = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
+    return when {
+        parts.size >= 2 -> "\${parts.first().first()}\${parts.last().first()}".uppercase(Locale.getDefault())
+        parts.isNotEmpty() -> parts.first().take(2).uppercase(Locale.getDefault())
+        else -> "?"
+    }
+}
+
+@Composable
+private fun HeaderAvatar(photoUrl: String?, displayName: String) {
+    val painter = rememberAsyncImagePainter(model = photoUrl)
+    Box(
+        Modifier.padding(end = 12.dp).size(40.dp).clip(CircleShape).background(Blue),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!photoUrl.isNullOrBlank() && painter.state is AsyncImagePainter.State.Success) {
+            Image(
+                painter = painter,
+                contentDescription = "Аватар профиля",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Text(
+                profileInitials(displayName),
+                color = Color.White,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
 
 class MainActivity : ComponentActivity() {
     private lateinit var auth: McAuth
@@ -455,16 +493,31 @@ class MainActivity : ComponentActivity() {
                 },
                 topBar = {
                 TopAppBar(title = {
-                    Column {
-                        Text(
-                            if (logs) "Логирование" else if (settings) "Настройки"
-                            else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
-                            fontWeight = FontWeight.Bold
-                        )
-                        val subtitle = if (selectedChat != null) {
-                            selectedChat.email.takeIf { !selectedChat.title.equals(selectedChat.email, true) }.orEmpty()
-                        } else if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail"
-                        if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!logs && !settings) {
+                            if (selectedChat != null) {
+                                HeaderAvatar(
+                                    selectedChat.avatarUrl,
+                                    selectedChat.senderName?.takeIf { it.isNotBlank() } ?: selectedChat.title
+                                )
+                            } else {
+                                val ownName = repo.ownProfileName().ifBlank {
+                                    accountEmail.ifBlank { repo.myEmail() }
+                                }
+                                HeaderAvatar(repo.ownProfileAvatar(), ownName)
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (logs) "Логирование" else if (settings) "Настройки"
+                                else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
+                                fontWeight = FontWeight.Bold
+                            )
+                            val subtitle = if (selectedChat != null) {
+                                selectedChat.email.takeIf { !selectedChat.title.equals(selectedChat.email, true) }.orEmpty()
+                            } else if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail"
+                            if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }, navigationIcon = {
                     if (selected != null || settings || logs) IconButton(onClick = {
