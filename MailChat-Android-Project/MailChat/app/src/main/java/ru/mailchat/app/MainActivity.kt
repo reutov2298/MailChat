@@ -86,25 +86,37 @@ private fun profileInitials(name: String): String {
 }
 
 @Composable
-private fun HeaderAvatar(photoUrl: String?, displayName: String) {
-    val painter = rememberAsyncImagePainter(model = photoUrl)
+private fun HeaderAvatar(
+    photoUrl: String?,
+    displayName: String,
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    endPadding: androidx.compose.ui.unit.Dp = 12.dp
+) {
+    val painter = rememberAsyncImagePainter(
+        model = photoUrl,
+        onState = { state ->
+            if (state is AsyncImagePainter.State.Error && !photoUrl.isNullOrBlank()) {
+                val host = runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
+                android.util.Log.w("MCAvatar", "Image load failed: host=$host, error=${state.result.throwable.javaClass.simpleName}")
+            }
+        }
+    )
     Box(
-        Modifier.padding(end = 12.dp).size(40.dp).clip(CircleShape).background(Blue),
+        Modifier.padding(end = endPadding).size(size).clip(CircleShape).background(Blue),
         contentAlignment = Alignment.Center
     ) {
+        Text(
+            profileInitials(displayName),
+            color = Color.White,
+            fontSize = if (size >= 48.dp) 20.sp else 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
         if (!photoUrl.isNullOrBlank() && painter.state is AsyncImagePainter.State.Success) {
             Image(
                 painter = painter,
                 contentDescription = "Аватар профиля",
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop
-            )
-        } else {
-            Text(
-                profileInitials(displayName),
-                color = Color.White,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
             )
         }
     }
@@ -752,15 +764,12 @@ class MainActivity : ComponentActivity() {
                                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
                                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            if (!chat.avatarUrl.isNullOrBlank()) {
-                                                AsyncImage(model = chat.avatarUrl, contentDescription = "Фото контакта",
-                                                    modifier = Modifier.size(50.dp).clip(CircleShape).background(Blue),
-                                                    contentScale = ContentScale.Crop)
-                                            } else {
-                                                Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
-                                                    Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                                                }
-                                            }
+                                            HeaderAvatar(
+                                                chat.avatarUrl,
+                                                chat.senderName?.takeIf { it.isNotBlank() } ?: chat.title,
+                                                size = 50.dp,
+                                                endPadding = 0.dp
+                                            )
                                             Spacer(Modifier.width(13.dp))
                                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
