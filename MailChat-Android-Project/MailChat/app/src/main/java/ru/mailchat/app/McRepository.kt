@@ -49,6 +49,8 @@ class McRepository(context: Context) {
                 .remove("gmail_mc_migration_page")
                 .remove("gmail_mc_migration_processed")
                 .remove("gmail_mc_migration_estimate")
+                .remove("gmail_mc_migration_retry_after")
+                .remove("gmail_mc_migration_failures")
                 .remove("gmail_mc_delete_ids")
                 .remove("gmail_mc_delete_index")
                 .remove("gmail_mc_pending_outgoing_labels")
@@ -114,6 +116,17 @@ class McRepository(context: Context) {
     fun migrationPageToken(): String? = prefs.getString("gmail_mc_migration_page", null)
     fun migrationProcessed(): Int = prefs.getInt("gmail_mc_migration_processed", 0)
     fun migrationEstimate(): Int = prefs.getInt("gmail_mc_migration_estimate", 0)
+    fun migrationRetryAfter(): Long = prefs.getLong("gmail_mc_migration_retry_after", 0L)
+    fun recordMigrationFailure(now: Long = System.currentTimeMillis()) {
+        val failures = (prefs.getInt("gmail_mc_migration_failures", 0) + 1).coerceAtMost(7)
+        val delay = minOf(3_600_000L, 60_000L shl (failures - 1))
+        prefs.edit().putInt("gmail_mc_migration_failures", failures)
+            .putLong("gmail_mc_migration_retry_after", now + delay).commit()
+    }
+    fun clearMigrationRetry() {
+        prefs.edit().remove("gmail_mc_migration_retry_after")
+            .remove("gmail_mc_migration_failures").commit()
+    }
     fun saveMigrationCheckpoint(pageToken: String?, processed: Int, estimate: Int) {
         prefs.edit().putString("gmail_mc_migration_page", pageToken)
             .putInt("gmail_mc_migration_processed", processed)
