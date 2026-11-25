@@ -26,20 +26,39 @@ class McGmailAdmin {
 
     private fun call(url: String, token: String, method: String = "GET", body: String? = null,
                      contentType: String = "application/json; charset=utf-8"): String = synchronized(requestMonitor) {
-        val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
-        if (waitMs > 0) Thread.sleep(waitMs)
-        lastRequestStartedAt = System.currentTimeMillis()
-        val builder = Request.Builder().url(url).header("Authorization", "Bearer " + token)
-        when (method) {
-            "POST" -> builder.post((body ?: "").toRequestBody(contentType.toMediaType()))
-            "DELETE" -> builder.delete()
-            else -> builder.get()
+        var attempt = 0
+        while (true) {
+            val waitMs = MIN_REQUEST_GAP_MS - (System.currentTimeMillis() - lastRequestStartedAt)
+            if (waitMs > 0) Thread.sleep(waitMs)
+            lastRequestStartedAt = System.currentTimeMillis()
+            val builder = Request.Builder().url(url).header("Authorization", "Bearer " + token)
+            when (method) {
+                "POST" -> builder.post((body ?: "").toRequestBody(contentType.toMediaType()))
+                "DELETE" -> builder.delete()
+                else -> builder.get()
+            }
+            http.newCall(builder.build()).execute().use { response ->
+                val text = response.body?.string().orEmpty()
+                if (response.isSuccessful) return@synchronized text
+
+                val transient403 = response.code == 403 && Regex(
+                    "\"reason\"\\s*:\\s*\"(rateLimitExceeded|userRateLimitExceeded|backendError)\"",
+                    RegexOption.IGNORE_CASE
+                ).containsMatchIn(text)
+                val retryable = response.code == 429 || response.code == 500 ||
+                    response.code == 502 || response.code == 503 || response.code == 504 || transient403
+                if (!retryable || attempt >= 5) {
+                    throw IllegalStateException("Gmail API " + response.code + ": " + text.take(700))
+                }
+
+                val retryAfterSeconds = response.header("Retry-After")?.toLongOrNull()
+                val exponentialDelay = minOf(30_000L, 1_000L shl attempt)
+                val delay = maxOf(exponentialDelay, (retryAfterSeconds ?: 0L) * 1_000L).coerceAtMost(60_000L)
+                attempt++
+                Thread.sleep(delay)
+            }
         }
-        http.newCall(builder.build()).execute().use { response ->
-            val text = response.body?.string().orEmpty()
-            if (!response.isSuccessful) throw IllegalStateException("Gmail API " + response.code + ": " + text.take(700))
-            text
-        }
+        throw IllegalStateException("Gmail API request ended unexpectedly")
     }
 
     fun ensureMcLabel(token: String): String {
@@ -56,7 +75,9 @@ class McGmailAdmin {
     }
 
     fun modifyMessages(token: String, ids: List<String>, add: List<String> = emptyList(), remove: List<String> = emptyList()) {
-        ids.distinct().chunked(1000).forEach { chunk ->
+        val uniqueIds = ids.asSequence().filter { it.isNotBlank() }.distinct().toList()
+        if (uniqueIds.isEmpty()) return
+        uniqueIds.chunked(1000).forEach { chunk ->
             val body = JSONObject().put("ids", JSONArray(chunk))
                 .put("addLabelIds", JSONArray(add.distinct()))
                 .put("removeLabelIds", JSONArray(remove.distinct())).toString()
@@ -167,7 +188,10 @@ class McGmailAdmin {
     }
 
     fun batchDelete(token: String, ids: List<String>) {
-        ids.distinct().chunked(1000).forEach { chunk ->
+        val uniqueIds = ids.asSequence().filter { it.isNotBlank() }.distinct().toList()
+        if (uniqueIds.isEmpty()) return
+        uniqueIds.chunked(1000).forEach { chunk ->
+            if (chunk.isEmpty()) return@forEach
             call(GmailConfig.GMAIL_API + "/messages/batchDelete", token, "POST",
                 JSONObject().put("ids", JSONArray(chunk)).toString())
         }
