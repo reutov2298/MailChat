@@ -849,25 +849,23 @@ class MainActivity : ComponentActivity() {
                                         "Безвозвратно удалено писем MC: " + result.deleted
                                     }
                                     deleteSnapshot = emptyList()
-                                    if (!result.changed) {
-                                        runCatching {
-                                            val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
-                                            mailStatsText = buildString {
-                                                if (stats.uniqueMessages != null) {
-                                                    append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
-                                                } else {
-                                                    append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
-                                                }
-                                                stats.labels.forEach { label ->
-                                                    append(label.name).append(": ").append(label.total)
-                                                    if (label.error != null) append(" — ошибка: ").append(label.error)
-                                                    else append(" (непрочитанных: ").append(label.unread).append(")")
-                                                    append("\n")
-                                                }
+                                    runCatching {
+                                        val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
+                                        mailStatsText = buildString {
+                                            if (stats.uniqueMessages != null) {
+                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                            } else {
+                                                append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
                                             }
-                                        }.onFailure {
-                                            mailStatsText = "Удаление выполнено; обновить статистику не удалось: " + it.message.orEmpty().take(160)
+                                            stats.labels.forEach { label ->
+                                                append(label.name).append(": ").append(label.total)
+                                                if (label.error != null) append(" — ошибка: ").append(label.error)
+                                                else append(" (непрочитанных: ").append(label.unread).append(")")
+                                                append("\n")
+                                            }
                                         }
+                                    }.onFailure {
+                                        mailStatsText = "Удаление завершено или прервано; обновить статистику не удалось: " + it.message.orEmpty().take(160)
                                     }
                                 } catch (e: Exception) {
                                     mailDeleteProgress = "Удаление прервано; прогресс сохранён: " + e.message.orEmpty().take(180)
