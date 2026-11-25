@@ -533,6 +533,10 @@ class MainActivity : ComponentActivity() {
                         if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         Text("Для загрузки имён и фотографий из Google Контактов после обновления переподключите аккаунт: отключите его и подключите снова.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
+                        Text("Логирование", fontWeight = FontWeight.Bold)
+                        Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
+                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
                         OutlinedTextField(value = minimizedSeconds, onValueChange = { minimizedSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение свёрнуто") }, singleLine = true)
@@ -542,17 +546,6 @@ class MainActivity : ComponentActivity() {
                             Checkbox(checked = diagnosticClick, onCheckedChange = { diagnosticClick = it })
                             Text("Звук при каждом обращении к серверу", fontSize = 14.sp)
                         }
-                        HorizontalDivider()
-                        Text("Ручная проверка", fontWeight = FontWeight.Bold)
-                        Button(
-                            onClick = { syncNow { status = it } },
-                            enabled = token != null && !syncInProgress
-                        ) { Text(if (syncInProgress) "Проверяем..." else "Проверить новые сообщения") }
-                        Text("Старые письма не импортируются. Точка начала синхронизации устанавливается при первом подключении.", fontSize = 13.sp)
-                        HorizontalDivider()
-                        Text("Логирование", fontWeight = FontWeight.Bold)
-                        Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
-                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Версия: ${BuildConfig.VERSION_NAME}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text("Номер сборки: ${BuildConfig.VERSION_CODE}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -799,9 +792,14 @@ class MainActivity : ComponentActivity() {
         }
         val topRefreshConnection = remember(listState, onRefresh) {
             object : NestedScrollConnection {
-                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                    if (!listState.canScrollBackward && available.y < 0f) topPullDistance = (topPullDistance - available.y).coerceAtMost(with(density) { 120.dp.toPx() })
-                    else if (available.y != 0f) topPullDistance = 0f
+                // Observe the upward pull before LazyColumn consumes it.
+                // This keeps the refresh gesture available while the keyboard is open.
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (!listState.canScrollBackward && available.y < 0f) {
+                        topPullDistance = (topPullDistance - available.y).coerceAtMost(with(density) { 120.dp.toPx() })
+                    } else if (available.y != 0f) {
+                        topPullDistance = 0f
+                    }
                     return Offset.Zero
                 }
                 override suspend fun onPreFling(available: Velocity): Velocity {
@@ -826,14 +824,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            if (isSyncing || topPullDistance > 0f) Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                if (isSyncing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                else Text("Потяните вверх для проверки новых сообщений", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (isSyncing) Spacer(Modifier.width(8.dp))
-                if (isSyncing) Text("Проверяем почту...", fontSize = 12.sp)
-            }
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
-            LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(topRefreshConnection)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize().nestedScroll(topRefreshConnection)) {
                 items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
@@ -893,6 +886,28 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(7.dp))
+                }
+            }
+            }
+            if (isSyncing || topPullDistance > 0f) {
+                Surface(
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+                    color = Navy.copy(alpha = 0.85f),
+                    shape = RoundedCornerShape(20.dp),
+                    shadowElevation = 4.dp
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSyncing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        else Text("Потяните вверх для проверки новых сообщений", fontSize = 12.sp, color = Color.White)
+                        if (isSyncing) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("Проверяем почту...", fontSize = 12.sp, color = Color.White)
+                        }
+                    }
                 }
             }
             }
