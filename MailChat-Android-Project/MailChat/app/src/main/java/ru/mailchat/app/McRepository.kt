@@ -95,19 +95,19 @@ class McRepository(context: Context) {
     }
 
     fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
-    fun setMcLabelId(value: String) { prefs.edit().putString("gmail_mc_label_id", value).apply() }
+    fun setMcLabelId(value: String) { prefs.edit().putString("gmail_mc_label_id", value).commit() }
 
     fun pendingOutgoingLabels(): Set<String> =
         prefs.getStringSet("gmail_mc_pending_outgoing_labels", emptySet())?.toSet() ?: emptySet()
     fun queueOutgoingLabel(id: String) {
         val ids = pendingOutgoingLabels().toMutableSet()
         ids.add(id)
-        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", ids).apply()
+        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", ids).commit()
     }
     fun completeOutgoingLabels(ids: Collection<String>) {
         val pending = pendingOutgoingLabels().toMutableSet()
         pending.removeAll(ids.toSet())
-        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", pending).apply()
+        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", pending).commit()
     }
 
     fun migrationDone(): Boolean = prefs.getBoolean("gmail_mc_migration_done", false)
@@ -117,16 +117,16 @@ class McRepository(context: Context) {
     fun saveMigrationCheckpoint(pageToken: String?, processed: Int, estimate: Int) {
         prefs.edit().putString("gmail_mc_migration_page", pageToken)
             .putInt("gmail_mc_migration_processed", processed)
-            .putInt("gmail_mc_migration_estimate", estimate).apply()
+            .putInt("gmail_mc_migration_estimate", estimate).commit()
     }
     fun finishMigration() {
         prefs.edit().putBoolean("gmail_mc_migration_done", true)
-            .remove("gmail_mc_migration_page").apply()
+            .remove("gmail_mc_migration_page").commit()
     }
 
     fun saveDeleteJob(ids: List<String>, nextIndex: Int = 0) {
         prefs.edit().putString("gmail_mc_delete_ids", JSONArray(ids.distinct()).toString())
-            .putInt("gmail_mc_delete_index", nextIndex).putBoolean("gmail_mc_delete_confirmed", true).apply()
+            .putInt("gmail_mc_delete_index", nextIndex).putBoolean("gmail_mc_delete_confirmed", true).commit()
     }
     fun deleteJobIds(): List<String> = runCatching {
         val array = JSONArray(prefs.getString("gmail_mc_delete_ids", "[]"))
@@ -134,8 +134,8 @@ class McRepository(context: Context) {
     }.getOrDefault(emptyList())
     fun deleteJobIndex(): Int = prefs.getInt("gmail_mc_delete_index", 0)
     fun deleteJobConfirmed(): Boolean = prefs.getBoolean("gmail_mc_delete_confirmed", false)
-    fun updateDeleteJobIndex(index: Int) { prefs.edit().putInt("gmail_mc_delete_index", index).apply() }
-    fun clearDeleteJob() { prefs.edit().remove("gmail_mc_delete_ids").remove("gmail_mc_delete_index").putBoolean("gmail_mc_delete_confirmed", false).apply() }
+    fun updateDeleteJobIndex(index: Int) { prefs.edit().putInt("gmail_mc_delete_index", index).commit() }
+    fun clearDeleteJob() { prefs.edit().remove("gmail_mc_delete_ids").remove("gmail_mc_delete_index").putBoolean("gmail_mc_delete_confirmed", false).commit() }
 
     fun restoreChat(email: String) {
         val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -174,7 +174,7 @@ class McRepository(context: Context) {
         }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
 
-    fun save(chats: List<McChat>) {
+    private fun serializeChats(chats: List<McChat>): String {
         val root = JSONArray()
         chats.forEach { c ->
             val messages = JSONArray()
@@ -188,8 +188,15 @@ class McRepository(context: Context) {
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
-        prefs.edit().putString("chats", root.toString()).apply()
+        return root.toString()
     }
+
+    fun save(chats: List<McChat>) {
+        prefs.edit().putString("chats", serializeChats(chats)).apply()
+    }
+
+    fun saveDurably(chats: List<McChat>): Boolean =
+        prefs.edit().putString("chats", serializeChats(chats)).commit()
 
     fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
 
