@@ -572,7 +572,7 @@ class MainActivity : ComponentActivity() {
                                     )
                                 } else editing.copy(
                                     text = body, version = editing.version + 1L, deleted = false,
-                                    sequence = editing.sequence.takeIf { it > 0L } ?: repo.nextSequence(email.lowercase(), accountEmail),
+                                    sequence = repo.sequenceForMutation(email.lowercase(), accountEmail, editing.id, editing.sequence),
                                     state = DeliveryState.QUEUED
                                 )
                                 val updatedChats = chats.map { currentChat ->
@@ -601,7 +601,7 @@ class MainActivity : ComponentActivity() {
                             onDeleteMessage = { target ->
                                 val deleted = target.copy(
                                     text = "", version = target.version + 1L, deleted = true,
-                                    sequence = target.sequence.takeIf { it > 0L } ?: repo.nextSequence(email.lowercase(), accountEmail),
+                                    sequence = repo.sequenceForMutation(email.lowercase(), accountEmail, target.id, target.sequence),
                                     state = DeliveryState.QUEUED
                                 )
                                 chats = chats.map { currentChat ->
