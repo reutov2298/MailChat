@@ -152,8 +152,10 @@ object McProtocol {
                 }
             }
 
-            if (values["x-mc-protocol"] != "2") {
-                return Verification(null, "Неподдерживаемая версия протокола")
+            val protocolVersion = values["x-mc-protocol"]?.trim().orEmpty()
+            if (protocolVersion != "2") {
+                val visibleVersion = protocolVersion.take(32).replace(Regex("[^A-Za-z0-9._-]"), "?")
+                return Verification(null, "Неподдерживаемая версия протокола: [${visibleVersion}]")
             }
 
             if (values["x-mc-signature-algorithm"] != "Ed25519") {
