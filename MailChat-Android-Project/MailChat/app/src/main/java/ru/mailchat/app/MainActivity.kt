@@ -179,7 +179,10 @@ class MainActivity : ComponentActivity() {
                 logger.add("Начата отправка сообщения получателю: $to")
                 val id = withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
-                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey()) { bytes -> McCrypto.sign(pair, bytes) }
+                    val ownProfile = runCatching { gmail.ownProfile(t) }.onFailure {
+                        logger.error("Google profile: получение не удалось: ${it.javaClass.simpleName}")
+                    }.getOrNull()
+                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey(), ownProfile?.name, ownProfile?.photoUrl) { bytes -> McCrypto.sign(pair, bytes) }
                 }
                 logger.add("Сообщение отправлено в Gmail: $id")
                 done(null)
@@ -269,9 +272,9 @@ class MainActivity : ComponentActivity() {
                         recoveredFromSpam = mail.spam
                     )
 
-                    val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
-                    val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
-                        (incomingName == null && current[index].senderName.isNullOrBlank())
+                    val incomingName = parsed.senderName.trim().takeIf { it.isNotBlank() }
+                    val incomingAvatar = parsed.senderAvatarUrl.trim().takeIf { it.isNotBlank() }
+                    val needsContactProfile = incomingName == null || incomingAvatar == null
                     val contactProfile = if (needsContactProfile) {
                         try {
                             withContext(Dispatchers.IO) { gmail.contactProfile(t, parsed.sender) }
@@ -282,23 +285,24 @@ class MainActivity : ComponentActivity() {
                     } else null
                     logger.info("Профиль контакта: lookup=${if (needsContactProfile) "выполнен" else "пропущен"}, result=${contactProfile != null}, namePresent=${!contactProfile?.name.isNullOrBlank()}, photoPresent=${!contactProfile?.photoUrl.isNullOrBlank()}, senderHeaderNamePresent=${!incomingName.isNullOrBlank()}")
                     val resolvedName = incomingName ?: contactProfile?.name
+                    val resolvedAvatar = incomingAvatar ?: contactProfile?.photoUrl
                     if (index >= 0) {
                         val existing = current[index]
                         current[index] = existing.copy(
                             title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
                             senderName = resolvedName ?: existing.senderName,
-                            avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
+                            avatarUrl = resolvedAvatar ?: existing.avatarUrl,
                             messages = existing.messages + message
                         )
                     } else {
                         current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
                             messages = listOf(message), senderName = resolvedName,
-                            avatarUrl = contactProfile?.photoUrl))
+                            avatarUrl = resolvedAvatar))
                     }
 
                     repo.save(current)
                     val savedChat = current.firstOrNull { it.email.equals(parsed.sender, true) }
-                    logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "From"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
+                    logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "подписанный MC"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
                     repo.markProcessed(mail.id)
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
