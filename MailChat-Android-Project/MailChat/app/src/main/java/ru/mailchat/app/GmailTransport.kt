@@ -125,7 +125,7 @@ class GmailTransport {
             technical.forEach { append(it).append("\r\n") }
             append("\r\n")
             append(normalizedText.replace("\n", "\r\n"))
-            append("\r\n\r\n\r\nНиже приведены технические данные MC, продублированные из заголовков электронного письма:\r\n")
+            append("\r\n")
             append("-----BEGIN MC DATA-----\r\n")
             technical.forEach { append(it).append("\r\n") }
             append("-----END MC DATA-----\r\n")
