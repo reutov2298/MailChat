@@ -72,6 +72,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var logger: McLogger
     private lateinit var identity: McIdentity
     private val gmail = GmailTransport()
+    private val gmailAdmin = McGmailAdmin()
+    private lateinit var mailManager: McMailManager
+    private var mailMigrationBusy by mutableStateOf(false)
+    private var mailMigrationText by mutableStateOf("")
+    private var mailStatsBusy by mutableStateOf(false)
+    private var mailStatsText by mutableStateOf("")
+    private var mailDeleteBusy by mutableStateOf(false)
+    private var mailDeleteProgress by mutableStateOf("")
     private var token: String? = null
     private var accountEmail: String = ""
     private var errorText by mutableStateOf("")
@@ -86,6 +94,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Security.setProperty("crypto.policy", "unlimited")
         auth = McAuth(this); repo = McRepository(this); logger = McLogger(this); identity = McIdentity(this)
+        mailManager = McMailManager(gmailAdmin, repo, logger)
         gmail.onRequestStarted = { if (repo.diagnosticClickEnabled()) playDiagnosticClick() }
         gmail.onServerRequest = { logger.server("Запрос Gmail API: $it") }
         gmail.onDiagnostic = { logger.debug(it) }
@@ -159,6 +168,40 @@ class MainActivity : ComponentActivity() {
                     logger.add("Первичная точка синхронизации сохранена; старые письма не импортируются")
                 }
                 logger.add("Gmail подключён: ${profile.email}")
+                try {
+                    withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
+                    if (!repo.migrationDone()) {
+                        mailMigrationBusy = true
+                        mailMigrationText = "Идёт первоначальная очистка старых писем MC..."
+                        withContext(Dispatchers.IO) {
+                            mailManager.migrateOldMessages(t, profile.email) { p ->
+                                runOnUiThread {
+                                    mailMigrationText = if (p.complete) {
+                                        "Первоначальная очистка завершена. Проверено: ${p.processed}"
+                                    } else {
+                                        "Первоначальная очистка: проверено ${p.processed} из примерно ${p.estimate}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (mailError: Exception) {
+                    mailMigrationText = "Ошибка первоначальной очистки: ${mailError.message.orEmpty().take(180)}"
+                    logger.error("Ошибка управления письмами MC: ${mailMigrationText}")
+                } finally {
+                    mailMigrationBusy = false
+                }
+                if (repo.deleteJobConfirmed() && auth.hasPermanentDeleteScope()) {
+                    runCatching {
+                        mailDeleteBusy = true
+                        withContext(Dispatchers.IO) {
+                            mailManager.resumeConfirmedDelete(t) { done, total ->
+                                runOnUiThread { mailDeleteProgress = "Удалено ${done} из ${total}" }
+                            }
+                        }
+                    }.onFailure { logger.error("Ошибка продолжения удаления MC: ${it.message.orEmpty().take(200)}") }
+                    mailDeleteBusy = false
+                }
                 authChanged++
                 syncNow(source = "после авторизации")
             } catch (e: Exception) {
@@ -215,6 +258,7 @@ class MainActivity : ComponentActivity() {
 
                 var accepted = 0
                 var skipped = 0
+                val archiveIds = mutableListOf<String>()
 
                 for (mail in incoming) {
                     if (repo.isProcessed(mail.id)) {
@@ -247,14 +291,9 @@ class MainActivity : ComponentActivity() {
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
-                    if (mail.spam) {
-                        withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
-                        logger.info("Подтверждённое сообщение MC возвращено из спама")
-                    }
-
                     val current = repo.chats().toMutableList()
                     if (current.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                        repo.markProcessed(mail.id)
+                        archiveIds += mail.id
                         skipped++
                         continue
                     }
@@ -301,11 +340,20 @@ class MainActivity : ComponentActivity() {
                     }
 
                     repo.save(current)
+                    archiveIds += mail.id
                     val savedChat = current.firstOrNull { it.email.equals(parsed.sender, true) }
                     logger.info("Профиль в локальной модели: сохранение выполнено, namePresent=${!savedChat?.senderName.isNullOrBlank()}, titlePresent=${!savedChat?.title.isNullOrBlank()}, avatarPresent=${!savedChat?.avatarUrl.isNullOrBlank()}, nameSource=${when { incomingName != null -> "подписанный MC"; contactProfile?.name != null -> "People API"; else -> "нет" }}")
-                    repo.markProcessed(mail.id)
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
+                }
+
+                if (archiveIds.isNotEmpty()) {
+                    val labelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
+                    withContext(Dispatchers.IO) {
+                        gmailAdmin.modifyMessages(t, archiveIds, add = listOf(labelId), remove = listOf("INBOX", "SPAM"))
+                    }
+                    archiveIds.distinct().forEach { repo.markProcessed(it) }
+                    logger.info("Обработанные письма MC помечены и архивированы: ${archiveIds.distinct().size}")
                 }
 
                 chats = repo.chats()
