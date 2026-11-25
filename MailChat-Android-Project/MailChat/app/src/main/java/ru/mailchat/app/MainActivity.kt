@@ -92,15 +92,6 @@ private fun HeaderAvatar(
     size: androidx.compose.ui.unit.Dp = 40.dp,
     endPadding: androidx.compose.ui.unit.Dp = 12.dp
 ) {
-    val painter = rememberAsyncImagePainter(
-        model = photoUrl,
-        onState = { state ->
-            if (state is AsyncImagePainter.State.Error && !photoUrl.isNullOrBlank()) {
-                val host = runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
-                android.util.Log.w("MCAvatar", "Image load failed: host=$host, error=${state.result.throwable.javaClass.simpleName}")
-            }
-        }
-    )
     Box(
         Modifier.padding(end = endPadding).size(size).clip(CircleShape).background(Blue),
         contentAlignment = Alignment.Center
@@ -111,12 +102,19 @@ private fun HeaderAvatar(
             fontSize = if (size >= 48.dp) 20.sp else 15.sp,
             fontWeight = FontWeight.SemiBold
         )
-        if (!photoUrl.isNullOrBlank() && painter.state is AsyncImagePainter.State.Success) {
-            Image(
-                painter = painter,
+        if (!photoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = photoUrl,
                 contentDescription = "Аватар профиля",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                onError = { state ->
+                    val host = runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
+                    android.util.Log.w(
+                        "MCAvatar",
+                        "Image load failed: host=$host, error=${state.result.throwable.javaClass.simpleName}"
+                    )
+                }
             )
         }
     }
@@ -212,7 +210,7 @@ class MainActivity : ComponentActivity() {
                     .getOrNull()
                 if (ownProfile != null) {
                     repo.setOwnProfile(ownProfile.name, ownProfile.photoUrl)
-                    logger.add("Профиль Google сохранён локально")
+                    logger.add("Профиль Google сохранён локально: name=${!ownProfile.name.isNullOrBlank()}, avatar=${!ownProfile.photoUrl.isNullOrBlank()}")
                 }
                 accountEmail = profile.email
                 repo.setEmail(profile.email)
@@ -337,7 +335,7 @@ class MainActivity : ComponentActivity() {
                         }
                         continue
                     }
-                    logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
+                    logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}; profileName=${parsed.senderName.isNotBlank()}; profileAvatar=${parsed.senderAvatarUrl.isNotBlank()}")
                     if (mail.spam) {
                         withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
                         logger.info("Подтверждённое сообщение MC возвращено из спама")
@@ -395,7 +393,7 @@ class MainActivity : ComponentActivity() {
                     repo.save(current)
                     repo.markProcessed(mail.id)
                     accepted++
-                    logger.info("Новое сообщение MC сохранено в локальном чате")
+                    logger.info("Новое сообщение MC сохранено в локальном чате; avatarSaved=${incomingAvatar != null}; nameSaved=${incomingName != null}")
                 }
 
                 chats = repo.chats()
