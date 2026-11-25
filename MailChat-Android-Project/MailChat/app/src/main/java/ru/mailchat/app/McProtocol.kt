@@ -196,13 +196,18 @@ object McProtocol {
             val messageId = values.getValue("x-mc-message-id")
             val chatId = values.getValue("x-mc-chat-id")
             val timestamp = values.getValue("x-mc-timestamp").toLong()
-            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > 60L * 60L * 24L * 30L) {
+            val messageType = values.getValue("x-mc-message-type")
+            if (messageType !in setOf("text", "edit", "delete")) {
+                return Verification(null, "Неизвестный тип события MC")
+            }
+            val allowedAgeSeconds = if (messageType == "text") 60L * 60L * 24L * 30L else 60L * 60L * 24L * 3650L
+            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > allowedAgeSeconds) {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
             val input = CanonicalInput(
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
-                values.getValue("x-mc-version"), values.getValue("x-mc-message-type"),
+                values.getValue("x-mc-version"), messageType,
                 timestamp.toString(), values.getValue("x-mc-sequence"),
                 values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
                 values["x-mc-message-version"] ?: "1", values.containsKey("x-mc-message-version")
@@ -218,7 +223,9 @@ object McProtocol {
             if (sequence <= 0L) return Verification(null, "Некорректный порядковый номер сообщения")
             val messageVersion = (values["x-mc-message-version"] ?: "1").toLong()
             if (messageVersion <= 0L) return Verification(null, "Некорректная версия сообщения")
-            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, values.getValue("x-mc-message-type")), null, diagnostics)
+            if (messageType == "text" && messageVersion != 1L) return Verification(null, "Некорректная версия нового сообщения")
+            if (messageType != "text" && messageVersion < 2L) return Verification(null, "Некорректная версия изменения сообщения")
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }
