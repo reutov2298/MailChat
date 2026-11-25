@@ -235,7 +235,6 @@ class MainActivity : ComponentActivity() {
         logger.info("Начата $source проверка почты. Точка синхронизации: $since")
 
         var result = "Проверка завершена"
-            var result = "Проверка завершена"
             try {
                 logger.add("Запрос списка входящих сообщений Gmail")
                 val incoming = withContext(Dispatchers.IO) {
