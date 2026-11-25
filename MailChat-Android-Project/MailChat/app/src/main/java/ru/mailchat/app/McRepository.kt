@@ -40,7 +40,25 @@ class McRepository(context: Context) {
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
-    fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
+    fun setEmail(value: String) {
+        val previous = prefs.getString("email", "").orEmpty()
+        if (previous.isNotBlank() && !previous.equals(value, true)) {
+            prefs.edit()
+                .remove("gmail_mc_label_id")
+                .remove("gmail_mc_migration_done")
+                .remove("gmail_mc_migration_page")
+                .remove("gmail_mc_migration_processed")
+                .remove("gmail_mc_migration_estimate")
+                .remove("gmail_mc_delete_ids")
+                .remove("gmail_mc_delete_index")
+                .remove("gmail_mc_pending_outgoing_labels")
+                .remove("processed")
+                .putBoolean("gmail_mc_delete_confirmed", false)
+                .putLong("baseline", 0L)
+                .apply()
+        }
+        prefs.edit().putString("email", value).apply()
+    }
 
     fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 60)
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 180)
