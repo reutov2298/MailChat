@@ -78,10 +78,10 @@ class GmailTransport {
         token: String, from: String, to: String, text: String, chatId: String, publicKey: String,
         messageId: String = UUID.randomUUID().toString(), sequence: Long = 1L,
         messageVersion: Long = 1L, messageType: String = "text",
-        sign: (ByteArray) -> String
+        messageTimestamp: Long? = null, sign: (ByteArray) -> String
     ): String {
         val id = messageId
-        val ts = System.currentTimeMillis() / 1000
+        val ts = messageTimestamp ?: System.currentTimeMillis() / 1000
         val normalizedText = McProtocol.normalizeText(text)
         val senderId = "android-${android.os.Build.MODEL}"
         val version = "1.0.0-prototype"
