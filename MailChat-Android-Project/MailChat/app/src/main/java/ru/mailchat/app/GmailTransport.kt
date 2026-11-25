@@ -157,11 +157,11 @@ class GmailTransport {
             try {
                 return listOnce(token, query, max)
             } catch (error: IllegalStateException) {
-                val status = Regex("Gmail batch: письмо \\d+ вернуло HTTP (429|500|502|503|504)")
+                val status = Regex("Gmail batch: письмо \\d+ вернуло HTTP (\\d{3})")
                     .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
-                if (status == null || attempt >= 5) throw error
+                if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 5) throw error
                 val delayMs = minOf(30_000L, 1_000L shl attempt)
-                onDiagnostic?.invoke("Gmail batch: временный HTTP $status; повтор всего пакета через ${delayMs / 1000} сек.")
+                onDiagnostic?.invoke("Gmail batch: временная ошибка HTTP ${status ?: "?"}; повтор всего пакета через ${delayMs / 1000} сек.")
                 Thread.sleep(delayMs)
                 attempt++
             }
@@ -200,7 +200,10 @@ class GmailTransport {
             val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
                 ?: throw IllegalStateException("Не удалось определить HTTP-статус письма в Gmail batch")
             if (status !in 200..299) {
-                throw IllegalStateException("Gmail batch: письмо $requestIndex вернуло HTTP $status")
+                val failure = McGmailBatchError.fromPart(status, part)
+                val detail = failure.diagnostic()
+                onDiagnostic?.invoke("Gmail batch: письмо $requestIndex HTTP $status; $detail")
+                throw IllegalStateException("Gmail batch: письмо $requestIndex вернуло HTTP $status ($detail)")
             }
             val jsonStart = part.indexOf("{", httpStart)
             val jsonEnd = part.lastIndexOf("}")
