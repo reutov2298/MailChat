@@ -46,6 +46,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -789,6 +791,12 @@ class MainActivity : ComponentActivity() {
         var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
         val imeInsets = WindowInsets.ime
+        val baseViewConfiguration = LocalViewConfiguration.current
+        val longPressViewConfiguration = remember(baseViewConfiguration) {
+            object : ViewConfiguration by baseViewConfiguration {
+                override val longPressTimeoutMillis: Long = 800L
+            }
+        }
         val topRefreshConnection = remember(listState, onRefresh) {
             object : NestedScrollConnection {
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
@@ -824,6 +832,7 @@ class MainActivity : ComponentActivity() {
                 if (isSyncing) Spacer(Modifier.width(8.dp))
                 if (isSyncing) Text("Проверяем почту...", fontSize = 12.sp)
             }
+            CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(topRefreshConnection)) {
                 items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
@@ -883,6 +892,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(Modifier.height(7.dp))
                 }
+            }
             }
             if (editingMessage != null) {
                 Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
