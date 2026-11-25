@@ -87,7 +87,7 @@ class McAuth(private val context: Context) {
     fun hasPermanentDeleteScope(): Boolean = runCatching {
         val json = prefs.getString("auth_state", null) ?: return@runCatching false
         val state = AuthState.jsonDeserialize(json)
-        state.lastTokenResponse?.scope.orEmpty().split(" ").contains(GmailConfig.DELETE_SCOPE)
+        state.scope.orEmpty().split(" ").contains(GmailConfig.DELETE_SCOPE)
     }.getOrDefault(false)
 
     fun isConnected(): Boolean = prefs.getString("auth_state", null) != null
