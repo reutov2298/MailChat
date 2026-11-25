@@ -6,7 +6,7 @@ class McMailManager(
     private val logger: McLogger
 ) {
     data class MigrationProgress(val processed: Int, val estimate: Int, val complete: Boolean)
-    data class Statistics(val labels: List<McGmailAdmin.LabelStat>, val uniqueMessages: Int)
+    data class Statistics(val labels: List<McGmailAdmin.LabelStat>, val uniqueMessages: Int?, val uniqueMessagesError: String? = null)
     data class DeleteResult(val deleted: Int, val changed: Boolean = false)
 
     fun ensureLabel(token: String): String {
@@ -64,8 +64,11 @@ class McMailManager(
         logger.info("Первоначальная очистка старых писем MC завершена")
     }
 
-    fun statistics(token: String): Statistics =
-        Statistics(admin.labelStats(token), admin.countUniqueMessages(token))
+    fun statistics(token: String): Statistics {
+        val labels = admin.labelStats(token)
+        val count = runCatching { admin.countUniqueMessages(token) }
+        return Statistics(labels, count.getOrNull(), count.exceptionOrNull()?.message?.take(180))
+    }
 
     fun previewDelete(token: String): List<String> {
         val labelId = ensureLabel(token)
@@ -83,9 +86,18 @@ class McMailManager(
     fun resumeConfirmedDelete(token: String, progress: (Int, Int) -> Unit): DeleteResult {
         if (!repo.deleteJobConfirmed()) return DeleteResult(0)
         val ids = repo.deleteJobIds()
+        val labelId = repo.mcLabelId().takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("Не сохранён ID метки MC для продолжения удаления")
         var index = repo.deleteJobIndex().coerceIn(0, ids.size)
         while (index < ids.size) {
             val chunk = ids.subList(index, minOf(index + 100, ids.size))
+            val currentLabels = admin.messageLabelIds(token, chunk)
+            val changedIds = chunk.filter { id -> labelId !in (currentLabels[id] ?: emptySet()) }
+            if (changedIds.isNotEmpty()) {
+                repo.clearDeleteJob()
+                logger.error("Удаление MC остановлено: метка MC изменилась у " + changedIds.size + " писем из текущей партии")
+                return DeleteResult(index, changed = true)
+            }
             admin.batchDelete(token, chunk)
             index += chunk.size
             repo.updateDeleteJobIndex(index)
@@ -96,4 +108,5 @@ class McMailManager(
         logger.info("Безвозвратное удаление писем MC завершено. Удалено: " + ids.size)
         return DeleteResult(ids.size)
     }
+}
 }
