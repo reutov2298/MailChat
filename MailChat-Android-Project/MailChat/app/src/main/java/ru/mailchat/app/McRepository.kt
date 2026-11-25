@@ -94,7 +94,10 @@ class McRepository(context: Context) {
                     m.optString("recipient"), m.optString("text"), m.optLong("timestamp"),
                     m.optBoolean("incoming"),
                     runCatching { DeliveryState.valueOf(m.optString("state")) }.getOrDefault(DeliveryState.QUEUED),
-                    m.optBoolean("spam")
+                    m.optBoolean("spam"),
+                    m.optLong("sequence", 0L),
+                    m.optLong("version", 1L),
+                    m.optBoolean("deleted", false)
                 )
             }
             val email = j.optString("email")
@@ -110,7 +113,8 @@ class McRepository(context: Context) {
                 else -> email
             }
             McChat(email, displayTitle, parsed, manuallyNamed, senderName, j.optString("avatarUrl").takeIf { it.isNotBlank() })
-        }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
+        }.map { chat -> chat.copy(messages = orderedMessages(chat.messages)) }
+            .sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
     }
 
     fun save(chats: List<McChat>) {
@@ -123,12 +127,39 @@ class McRepository(context: Context) {
                         .put("id", m.id).put("sender", m.sender).put("recipient", m.recipient)
                         .put("text", m.text).put("timestamp", m.timestamp).put("incoming", m.incoming)
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
+                        .put("sequence", m.sequence).put("version", m.version).put("deleted", m.deleted)
                 )
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
         prefs.edit().putString("chats", root.toString()).apply()
     }
+
+    fun nextSequence(chatId: String, sender: String): Long {
+        val key = "message_sequence:${chatId.lowercase()}:${sender.lowercase()}"
+        val stored = prefs.getLong(key, 0L)
+        val ownMessages = chats().firstOrNull { it.email.equals(chatId, true) }
+            ?.messages?.filter { it.sender.equals(sender, true) }.orEmpty()
+        // Legacy MC builds wrote sequence=1 to every message; count those records
+        // so the first upgraded message continues after the existing history.
+        val existingMax = maxOf(
+            ownMessages.maxOfOrNull { it.sequence } ?: 0L,
+            ownMessages.size.toLong()
+        )
+        val next = maxOf(stored, existingMax) + 1L
+        prefs.edit().putLong(key, next).commit()
+        return next
+    }
+
+    fun sequenceForMutation(chatId: String, sender: String, messageId: String, current: Long): Long {
+        val messages = chats().firstOrNull { it.email.equals(chatId, true) }
+            ?.messages?.filter { it.sender.equals(sender, true) }.orEmpty()
+        val collision = current > 0L && messages.any { it.id != messageId && it.sequence == current }
+        return if (current <= 0L || collision) nextSequence(chatId, sender) else current
+    }
+
+    fun orderedMessages(messages: List<McMessage>): List<McMessage> =
+        messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id })
 
     fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
 

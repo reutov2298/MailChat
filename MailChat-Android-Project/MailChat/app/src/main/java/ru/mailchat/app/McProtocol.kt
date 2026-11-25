@@ -12,7 +12,10 @@ object McProtocol {
         val sender: String,
         val recipient: String,
         val text: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val sequence: Long = 0L,
+        val messageVersion: Long = 1L,
+        val messageType: String = "text"
     )
 
     data class Verification(
@@ -25,17 +28,19 @@ object McProtocol {
         val messageId: String, val chatId: String, val senderId: String,
         val sender: String, val recipient: String, val version: String,
         val messageType: String, val timestamp: String, val sequence: String,
-        val keyId: String, val publicKey: String, val text: String
+        val keyId: String, val publicKey: String, val text: String,
+        val messageVersion: String = "1", val extended: Boolean = false,
+        val protocol: String = "1"
     )
 
     fun normalizeText(value: String): String =
         value.replace("\r\n", "\n").replace('\r', '\n').trimEnd('\n')
 
     fun canonical(input: CanonicalInput): String = listOf(
-        "1", input.messageId, input.chatId, input.senderId, input.sender,
+        input.protocol, input.messageId, input.chatId, input.senderId, input.sender,
         input.recipient, input.version, input.messageType, input.timestamp,
         input.sequence, input.keyId, input.publicKey, normalizeText(input.text)
-    ).joinToString("\n")
+    ).let { fields -> (if (input.extended) fields + input.messageVersion else fields).joinToString("\n") }
 
     private fun sha256(bytes: ByteArray): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -43,7 +48,7 @@ object McProtocol {
 
     fun signatureDiagnostics(role: String, input: CanonicalInput, signature: String): List<String> {
         val fields = linkedMapOf(
-            "protocol" to "1", "messageId" to input.messageId, "chatId" to input.chatId,
+            "protocol" to input.protocol, "messageId" to input.messageId, "chatId" to input.chatId,
             "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
             "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
             "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
@@ -147,7 +152,8 @@ object McProtocol {
                 }
             }
 
-            if (values["x-mc-protocol"] != "1") {
+            val protocol = values.getValue("x-mc-protocol")
+            if (protocol !in setOf("1", "2")) {
                 return Verification(null, "Неподдерживаемая версия протокола")
             }
 
@@ -192,15 +198,25 @@ object McProtocol {
             val messageId = values.getValue("x-mc-message-id")
             val chatId = values.getValue("x-mc-chat-id")
             val timestamp = values.getValue("x-mc-timestamp").toLong()
-            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > 60L * 60L * 24L * 30L) {
+            val messageType = values.getValue("x-mc-message-type")
+            if (messageType !in setOf("text", "edit", "delete")) {
+                return Verification(null, "Неизвестный тип события MC")
+            }
+            if (protocol == "1" && messageType != "text") return Verification(null, "Событие требует протокол MC 2")
+            if (protocol == "2" && (messageType == "text" || !values.containsKey("x-mc-message-version"))) {
+                return Verification(null, "Некорректное событие протокола MC 2")
+            }
+            val allowedAgeSeconds = if (messageType == "text") 60L * 60L * 24L * 30L else 60L * 60L * 24L * 3650L
+            if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > allowedAgeSeconds) {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
             val input = CanonicalInput(
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
-                values.getValue("x-mc-version"), values.getValue("x-mc-message-type"),
+                values.getValue("x-mc-version"), messageType,
                 timestamp.toString(), values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text
+                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
+                values["x-mc-message-version"] ?: "1", protocol == "2", protocol
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
             val signature = values.getValue("x-mc-signature")
@@ -209,7 +225,13 @@ object McProtocol {
                 return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
             }
 
-            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp), null, diagnostics)
+            val sequence = values.getValue("x-mc-sequence").toLong()
+            if (sequence <= 0L) return Verification(null, "Некорректный порядковый номер сообщения")
+            val messageVersion = (values["x-mc-message-version"] ?: "1").toLong()
+            if (messageVersion <= 0L) return Verification(null, "Некорректная версия сообщения")
+            if (messageType == "text" && messageVersion != 1L) return Verification(null, "Некорректная версия нового сообщения")
+            if (messageType != "text" && messageVersion < 2L) return Verification(null, "Некорректная версия изменения сообщения")
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }

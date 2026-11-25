@@ -16,6 +16,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -45,6 +46,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -172,16 +175,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun sendMessage(to: String, text: String, done: (String?) -> Unit) {
+    private fun sendMessage(to: String, message: McMessage, messageType: String, done: (String?) -> Unit) {
         val t = token ?: run { done("Сначала подключите Gmail"); return }
         lifecycleScope.launch {
             try {
-                logger.add("Начата отправка сообщения получателю: $to")
+                logger.add("Начата отправка события $messageType получателю: $to")
                 val id = withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
-                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey()) { bytes -> McCrypto.sign(pair, bytes) }
+                    gmail.send(
+                        t, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
+                        message.chatId, identity.publicKey(),
+                        messageId = message.id, sequence = message.sequence,
+                        messageVersion = message.version, messageType = messageType,
+                        messageTimestamp = message.timestamp
+                    ) { bytes -> McCrypto.sign(pair, bytes) }
                 }
-                logger.add("Сообщение отправлено в Gmail: $id")
+                logger.add("Событие MC отправлено в Gmail: $id; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
                 done(null)
             } catch (e: Exception) {
                 logger.error("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
@@ -250,24 +259,37 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val current = repo.chats().toMutableList()
-                    if (current.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                        repo.markProcessed(mail.id)
-                        skipped++
-                        continue
-                    }
-
                     val index = current.indexOfFirst { it.email.equals(parsed.sender, true) }
                     val message = McMessage(
                         id = parsed.messageId,
                         chatId = parsed.chatId,
                         sender = parsed.sender,
                         recipient = parsed.recipient,
-                        text = parsed.text,
+                        text = if (parsed.messageType == "delete") "" else parsed.text,
                         timestamp = parsed.timestamp,
                         incoming = true,
                         state = DeliveryState.DELIVERED,
-                        recoveredFromSpam = mail.spam
+                        recoveredFromSpam = mail.spam,
+                        sequence = parsed.sequence,
+                        version = parsed.messageVersion,
+                        deleted = parsed.messageType == "delete"
                     )
+                    val existingIndex = if (index >= 0) current[index].messages.indexOfFirst { it.id == parsed.messageId } else -1
+                    if (existingIndex >= 0) {
+                        val existing = current[index].messages[existingIndex]
+                        if (parsed.messageVersion > existing.version) {
+                            val updatedMessages = current[index].messages.toMutableList()
+                            updatedMessages[existingIndex] = existing.copy(
+                                text = message.text, version = parsed.messageVersion,
+                                sequence = parsed.sequence, deleted = message.deleted
+                            )
+                            current[index] = current[index].copy(messages = repo.orderedMessages(updatedMessages))
+                        } else {
+                            repo.markProcessed(mail.id)
+                            skipped++
+                            continue
+                        }
+                    }
 
                     val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
                     val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
@@ -287,7 +309,7 @@ class MainActivity : ComponentActivity() {
                             title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
                             senderName = resolvedName ?: existing.senderName,
                             avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
-                            messages = existing.messages + message
+                            messages = if (existingIndex >= 0) existing.messages else repo.orderedMessages(existing.messages + message)
                         )
                     } else {
                         current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
@@ -540,15 +562,70 @@ class MainActivity : ComponentActivity() {
                     selected != null -> {
                         val email = selected!!
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
-                        Conversation(chat, Modifier.padding(padding), isSyncing = syncInProgress, onRefresh = { syncNow(source = "жест обновления переписки") }, onSend = { body ->
-                            val outgoing = McMessage(chatId = email.lowercase(), sender = accountEmail, recipient = email, text = body, incoming = false, state = DeliveryState.QUEUED)
-                            chats = (chats.filterNot { it.email.equals(email, true) } + chat.copy(messages = chat.messages + outgoing)).sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }
-                            repo.save(chats)
-                            sendMessage(email, body) { error ->
-                                val updated = chats.map { c -> if (c.email.equals(email, true)) c.copy(messages = c.messages.map { m -> if (m.id == outgoing.id) m.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED) else m }) else c }
-                                chats = updated; repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
+                        Conversation(
+                            chat, Modifier.padding(padding), isSyncing = syncInProgress,
+                            onRefresh = { syncNow(source = "жест обновления переписки") },
+                            onSend = { body, editing ->
+                                val outgoing = if (editing == null) {
+                                    McMessage(
+                                        chatId = email.lowercase(), sender = accountEmail, recipient = email,
+                                        text = body, incoming = false, state = DeliveryState.QUEUED,
+                                        sequence = repo.nextSequence(email.lowercase(), accountEmail)
+                                    )
+                                } else editing.copy(
+                                    text = body, version = editing.version + 1L, deleted = false,
+                                    sequence = repo.sequenceForMutation(email.lowercase(), accountEmail, editing.id, editing.sequence),
+                                    state = DeliveryState.QUEUED
+                                )
+                                val updatedChats = chats.map { currentChat ->
+                                    if (currentChat.email.equals(email, true)) {
+                                        val messages = if (editing == null) currentChat.messages + outgoing
+                                        else currentChat.messages.map { if (it.id == editing.id) outgoing else it }
+                                        currentChat.copy(messages = repo.orderedMessages(messages))
+                                    } else currentChat
+                                }
+                                chats = if (updatedChats.any { it.email.equals(email, true) }) updatedChats
+                                    else updatedChats + McChat(email, messages = listOf(outgoing))
+                                repo.save(chats)
+                                sendMessage(email, outgoing, if (editing == null) "text" else "edit") { error ->
+                                    chats = chats.map { currentChat ->
+                                        if (currentChat.email.equals(email, true)) currentChat.copy(
+                                            messages = currentChat.messages.map { item ->
+                                                if (item.id == outgoing.id && item.version == outgoing.version)
+                                                    item.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED)
+                                                else item
+                                            }
+                                        ) else currentChat
+                                    }
+                                    repo.save(chats); status = error ?: "Принято Gmail"; authChanged++
+                                }
+                            },
+                            onDeleteMessage = { target ->
+                                val deleted = target.copy(
+                                    text = "", version = target.version + 1L, deleted = true,
+                                    sequence = repo.sequenceForMutation(email.lowercase(), accountEmail, target.id, target.sequence),
+                                    state = DeliveryState.QUEUED
+                                )
+                                chats = chats.map { currentChat ->
+                                    if (currentChat.email.equals(email, true)) currentChat.copy(
+                                        messages = repo.orderedMessages(currentChat.messages.map { if (it.id == target.id) deleted else it })
+                                    ) else currentChat
+                                }
+                                repo.save(chats)
+                                sendMessage(email, deleted, "delete") { error ->
+                                    chats = chats.map { currentChat ->
+                                        if (currentChat.email.equals(email, true)) currentChat.copy(
+                                            messages = currentChat.messages.map { item ->
+                                                if (item.id == deleted.id && item.version == deleted.version)
+                                                    item.copy(state = if (error == null) DeliveryState.SENT_TO_GMAIL else DeliveryState.FAILED)
+                                                else item
+                                            }
+                                        ) else currentChat
+                                    }
+                                    repo.save(chats); status = error ?: "Сообщение удалено"; authChanged++
+                                }
                             }
-                        })
+                        )
                     }
                     else -> Column(Modifier.padding(padding).fillMaxSize().padding(12.dp)) {
                         if (token == null) {
@@ -699,11 +776,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun Conversation(chat: McChat, modifier: Modifier, isSyncing: Boolean, onRefresh: () -> Unit, onSend: (String) -> Unit) {
-        var draft by remember { mutableStateOf("") }
+    @Composable private fun Conversation(
+        chat: McChat,
+        modifier: Modifier,
+        isSyncing: Boolean,
+        onRefresh: () -> Unit,
+        onSend: (String, McMessage?) -> Unit,
+        onDeleteMessage: (McMessage) -> Unit
+    ) {
+        var draft by remember(chat.email) { mutableStateOf("") }
+        var editingMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
+        var actionMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         val listState = rememberLazyListState()
         var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
+        val imeInsets = WindowInsets.ime
+        val baseViewConfiguration = LocalViewConfiguration.current
+        val longPressViewConfiguration = remember(baseViewConfiguration) {
+            object : ViewConfiguration by baseViewConfiguration {
+                override val longPressTimeoutMillis: Long = 800L
+            }
+        }
         val topRefreshConnection = remember(listState, onRefresh) {
             object : NestedScrollConnection {
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
@@ -720,6 +813,12 @@ class MainActivity : ComponentActivity() {
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
         LaunchedEffect(chat.email) { if (chat.messages.isNotEmpty()) listState.scrollToItem(chat.messages.lastIndex) }
+        LaunchedEffect(chat.email) {
+            snapshotFlow { imeInsets.getBottom(density) }.collect {
+                val lastIndex = chat.messages.lastIndex
+                if (lastIndex >= 0) listState.scrollToItem(lastIndex)
+            }
+        }
         LaunchedEffect(chat.messages.size) {
             if (scrollAfterSend && chat.messages.isNotEmpty()) {
                 listState.animateScrollToItem(chat.messages.lastIndex)
@@ -733,42 +832,60 @@ class MainActivity : ComponentActivity() {
                 if (isSyncing) Spacer(Modifier.width(8.dp))
                 if (isSyncing) Text("Проверяем почту...", fontSize = 12.sp)
             }
+            CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(topRefreshConnection)) {
-                items(chat.messages, key = { it.id }) { message ->
+                items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
-                            color = if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            modifier = Modifier
+                                .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
+                                .pointerInput(message.id, message.deleted, message.incoming) {
+                                    detectTapGestures(onLongPress = {
+                                        if (!message.incoming && !message.deleted &&
+                                            message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED)
+                                        ) actionMessage = message
+                                    })
+                                }
+                                .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
+                            color = if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
                                 bottomEnd = if (message.incoming) 18.dp else 5.dp
                             )
                         ) {
-                            Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
-                                if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                Text(message.text)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
-                                            .format(Date(message.timestamp * 1000L)),
-                                        fontSize = 10.sp,
-                                        color = Color.LightGray
-                                    )
-                                    if (!message.incoming) {
-                                        Spacer(Modifier.width(4.dp))
-                                        val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
-                                        when (message.state) {
-                                            DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                            DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                            DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
-                                                Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                                Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                            if (message.deleted) {
+                                Text(
+                                    "delete messages",
+                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    fontSize = 12.sp
+                                )
+                            } else {
+                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                    if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
+                                    Text(message.text)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault()).format(Date(message.timestamp * 1000L)),
+                                            fontSize = 10.sp, color = Color.LightGray
+                                        )
+                                        if (!message.incoming) {
+                                            Spacer(Modifier.width(4.dp))
+                                            val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
+                                            when (message.state) {
+                                                DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
+                                                    Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                    Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                }
+                                                DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                             }
-                                            DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                         }
                                     }
                                 }
@@ -776,6 +893,13 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(7.dp))
+                }
+            }
+            }
+            if (editingMessage != null) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Редактирование сообщения", modifier = Modifier.weight(1f), color = Blue, fontSize = 12.sp)
+                    TextButton(onClick = { editingMessage = null; draft = "" }) { Text("Отмена") }
                 }
             }
             Surface(
@@ -798,11 +922,39 @@ class MainActivity : ComponentActivity() {
                             focusedContainerColor = Color.Transparent
                         )
                     )
-                    IconButton(onClick = { if (draft.isNotBlank()) { scrollAfterSend = true; onSend(draft.trim()); draft = "" } }, enabled = draft.isNotBlank()) {
+                    IconButton(onClick = {
+                        if (draft.isNotBlank()) {
+                            scrollAfterSend = true
+                            onSend(draft.trim(), editingMessage)
+                            draft = ""
+                            editingMessage = null
+                        }
+                    }, enabled = draft.isNotBlank()) {
                         Icon(Icons.Default.Send, "Отправить", tint = if (draft.isNotBlank()) Blue else Color.Gray)
                     }
                 }
             }
+        }
+        actionMessage?.let { selectedMessage ->
+            AlertDialog(
+                onDismissRequest = { actionMessage = null },
+                title = { Text("Сообщение") },
+                text = { Text("Что сделать с этим сообщением?") },
+                confirmButton = {
+                    Row {
+                        TextButton(onClick = {
+                            editingMessage = selectedMessage
+                            draft = selectedMessage.text
+                            actionMessage = null
+                        }) { Text("Редактировать") }
+                        TextButton(onClick = {
+                            onDeleteMessage(selectedMessage)
+                            actionMessage = null
+                        }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
+            )
         }
     }
 

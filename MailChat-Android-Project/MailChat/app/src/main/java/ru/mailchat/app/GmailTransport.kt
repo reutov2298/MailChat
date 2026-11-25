@@ -74,28 +74,37 @@ class GmailTransport {
         return null
     }
 
-    fun send(token: String, from: String, to: String, text: String, chatId: String, publicKey: String, sign: (ByteArray) -> String): String {
-        val id = UUID.randomUUID().toString()
-        val ts = System.currentTimeMillis() / 1000
+    fun send(
+        token: String, from: String, to: String, text: String, chatId: String, publicKey: String,
+        messageId: String = UUID.randomUUID().toString(), sequence: Long = 1L,
+        messageVersion: Long = 1L, messageType: String = "text",
+        messageTimestamp: Long? = null, sign: (ByteArray) -> String
+    ): String {
+        val id = messageId
+        val ts = messageTimestamp ?: System.currentTimeMillis() / 1000
         val normalizedText = McProtocol.normalizeText(text)
         val senderId = "android-${android.os.Build.MODEL}"
         val version = "1.0.0-prototype"
-        val sequence = "1"
+        val sequenceValue = sequence.toString()
+        val messageVersionValue = messageVersion.toString()
+        val protocol = if (messageType == "text") "1" else "2"
         val keyId = from
         val canonicalInput = McProtocol.CanonicalInput(
-            id, chatId, senderId, from, to, version, "text", ts.toString(),
-            sequence, keyId, publicKey, normalizedText
+            id, chatId, senderId, from, to, version, messageType, ts.toString(),
+            sequenceValue, keyId, publicKey, normalizedText, messageVersionValue,
+            protocol == "2", protocol
         )
         val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
         McProtocol.signatureDiagnostics("sender", canonicalInput, signature).forEach { onDiagnostic?.invoke(it) }
-        val technical = listOf(
-            "X-MC-Protocol: 1", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
+        val technical = mutableListOf(
+            "X-MC-Protocol: $protocol", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
             "X-MC-Sender-ID: $senderId", "X-MC-Sender: $from", "X-MC-Recipient: $to",
-            "X-MC-Version: $version", "X-MC-Message-Type: text", "X-MC-Timestamp: $ts",
-            "X-MC-Sequence: $sequence", "X-MC-Key-ID: $keyId", "X-MC-Public-Key: $publicKey",
+            "X-MC-Version: $version", "X-MC-Message-Type: $messageType", "X-MC-Timestamp: $ts",
+            "X-MC-Sequence: $sequenceValue", "X-MC-Key-ID: $keyId", "X-MC-Public-Key: $publicKey",
             "X-MC-Signature-Algorithm: Ed25519", "X-MC-Signature: $signature"
         )
+        if (protocol == "2") technical.add(10, "X-MC-Message-Version: $messageVersionValue")
         val mime = buildString {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
