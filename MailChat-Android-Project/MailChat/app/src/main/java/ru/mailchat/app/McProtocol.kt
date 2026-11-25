@@ -117,6 +117,66 @@ object McProtocol {
     }
 
 
+    private fun verifyProtocolV1(
+        mail: GmailTransport.RemoteMessage,
+        ownEmail: String,
+        values: Map<String, String>,
+        textStart: Int
+    ): Verification {
+        if (values["x-mc-signature-algorithm"] != "Ed25519") {
+            return Verification(null, "Неподдерживаемый алгоритм подписи")
+        }
+
+        // V1 places the message text after the MC DATA block; its signature
+        // covers the 13 fields below in this exact order.
+        val sender = values.getValue("x-mc-sender")
+        val fromAddress = Regex(
+            "[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}",
+            RegexOption.IGNORE_CASE
+        ).find(mail.from)?.value
+        if (fromAddress == null || !fromAddress.equals(sender, true)) {
+            return Verification(null, "Адрес отправителя не совпадает")
+        }
+
+        val recipient = values.getValue("x-mc-recipient")
+        if (!recipient.equals(ownEmail, true)) {
+            return Verification(null, "Получатель не совпадает с аккаунтом MC")
+        }
+
+        val messageId = values.getValue("x-mc-message-id")
+        val chatId = values.getValue("x-mc-chat-id")
+        val timestamp = values.getValue("x-mc-timestamp").toLong()
+        if (kotlin.math.abs(System.currentTimeMillis() / 1000 - timestamp) > 60L * 60L * 24L * 30L) {
+            return Verification(null, "Время сообщения выходит за допустимый диапазон")
+        }
+
+        val publicKeyText = values.getValue("x-mc-public-key")
+        val publicKey = KeyFactory.getInstance("Ed25519", McCrypto.provider).generatePublic(
+            X509EncodedKeySpec(Base64.getDecoder().decode(publicKeyText))
+        )
+
+        val rawText = mail.body.substring(textStart)
+            .trimStart('\r', '\n')
+            .trimEnd('\r', '\n')
+        val text = normalizeText(rawText)
+        val canonical = listOf(
+            "1", messageId, chatId, values.getValue("x-mc-sender-id"),
+            sender, recipient, values.getValue("x-mc-version"),
+            values.getValue("x-mc-message-type"), timestamp.toString(),
+            values.getValue("x-mc-sequence"), values.getValue("x-mc-key-id"),
+            publicKeyText, text
+        ).joinToString("\n")
+        val signature = values.getValue("x-mc-signature")
+        if (!McCrypto.verify(publicKey, canonical.toByteArray(Charsets.UTF_8), signature)) {
+            return Verification(null, "Криптографическая подпись протокола v1 не прошла проверку")
+        }
+
+        return Verification(
+            Parsed(messageId, chatId, sender, recipient, text, timestamp, "", ""),
+            null
+        )
+    }
+
     fun verifyDetailed(
         mail: GmailTransport.RemoteMessage,
         ownEmail: String
@@ -153,6 +213,9 @@ object McProtocol {
             }
 
             val protocolVersion = values["x-mc-protocol"]?.trim().orEmpty()
+            if (protocolVersion == "1") {
+                return verifyProtocolV1(mail, ownEmail, values, end + finish.length)
+            }
             if (protocolVersion != "2") {
                 val visibleVersion = protocolVersion.take(32).replace(Regex("[^A-Za-z0-9._-]"), "?")
                 return Verification(null, "Неподдерживаемая версия протокола: [${visibleVersion}]")
