@@ -79,7 +79,7 @@ private fun profileInitials(name: String): String {
     val normalized = name.substringBefore('@').replace(Regex("[._-]+"), " ").trim()
     val parts = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
     return when {
-        parts.size >= 2 -> "\${parts.first().first()}\${parts.last().first()}".uppercase(Locale.getDefault())
+        parts.size >= 2 -> (parts.first().first().toString() + parts.last().first().toString()).uppercase(Locale.getDefault())
         parts.isNotEmpty() -> parts.first().take(2).uppercase(Locale.getDefault())
         else -> "?"
     }
