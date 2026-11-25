@@ -64,11 +64,6 @@ class McSyncWorker(
                     continue
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
-                if (chats.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                    repo.markProcessed(mail.id)
-                    continue
-                }
-
                 if (mail.spam) {
                     withContext(Dispatchers.IO) { gmail.moveOutOfSpam(token, mail.id) }
                 }
@@ -82,11 +77,31 @@ class McSyncWorker(
                     timestamp = parsed.timestamp,
                     incoming = true,
                     state = DeliveryState.DELIVERED,
-                    recoveredFromSpam = mail.spam
+                    recoveredFromSpam = mail.spam,
+                    sequence = parsed.sequence,
+                    version = parsed.messageVersion,
+                    deleted = parsed.messageType == "delete"
                 )
                 val index = chats.indexOfFirst { it.email.equals(parsed.sender, true) }
-                if (index >= 0) {
-                    chats[index] = chats[index].copy(title = if (!chats[index].nameManuallySet && mail.senderName.isNotBlank()) mail.senderName else chats[index].title, senderName = mail.senderName.takeIf { it.isNotBlank() } ?: chats[index].senderName, messages = chats[index].messages + message)
+                val existingIndex = if (index >= 0) chats[index].messages.indexOfFirst { it.id == parsed.messageId } else -1
+                if (existingIndex >= 0) {
+                    val existing = chats[index].messages[existingIndex]
+                    if (parsed.messageVersion > existing.version) {
+                        val updatedMessages = chats[index].messages.toMutableList()
+                        updatedMessages[existingIndex] = existing.copy(
+                            text = if (parsed.messageType == "delete") "" else parsed.text,
+                            version = parsed.messageVersion,
+                            sequence = parsed.sequence,
+                            deleted = parsed.messageType == "delete"
+                        )
+                        chats[index] = chats[index].copy(messages = repo.orderedMessages(updatedMessages))
+                    }
+                } else if (index >= 0) {
+                    chats[index] = chats[index].copy(
+                        title = if (!chats[index].nameManuallySet && mail.senderName.isNotBlank()) mail.senderName else chats[index].title,
+                        senderName = mail.senderName.takeIf { it.isNotBlank() } ?: chats[index].senderName,
+                        messages = repo.orderedMessages(chats[index].messages + message)
+                    )
                 } else {
                     chats.add(McChat(parsed.sender, title = mail.senderName.ifBlank { parsed.sender }, messages = listOf(message), senderName = mail.senderName.takeIf { it.isNotBlank() }))
                 }
