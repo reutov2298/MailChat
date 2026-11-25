@@ -23,12 +23,18 @@ class McMailManager(
             progress(MigrationProgress(repo.migrationProcessed(), repo.migrationEstimate(), true))
             return
         }
-        val labelId = ensureLabel(token)
-        var pageToken = repo.migrationPageToken()
-        var processed = repo.migrationProcessed()
-        var estimate = repo.migrationEstimate()
-        logger.info("Первоначальная очистка старых писем MC: продолжение с сохранённой позиции")
-        while (true) {
+        val retryAfter = repo.migrationRetryAfter()
+        if (retryAfter > System.currentTimeMillis()) {
+            val seconds = ((retryAfter - System.currentTimeMillis() + 999L) / 1000L).coerceAtLeast(1L)
+            throw IllegalStateException("Повтор первоначальной очистки отложен на $seconds сек. после ошибки Gmail API")
+        }
+        try {
+            val labelId = ensureLabel(token)
+            var pageToken = repo.migrationPageToken()
+            var processed = repo.migrationProcessed()
+            var estimate = repo.migrationEstimate()
+            logger.info("Первоначальная очистка старых писем MC: продолжение с сохранённой позиции")
+            while (true) {
             val pageResult = try {
                 admin.candidatePage(token, pageToken, 50)
             } catch (error: Exception) {
@@ -74,9 +80,14 @@ class McMailManager(
             logger.info("Первоначальная очистка MC: проверено кандидатов " + processed + "; помечено входящих " + incomingIds.size + "; исходящих " + outgoingIds.size)
             if (pageToken == null) break
         }
-        repo.finishMigration()
-        progress(MigrationProgress(processed, estimate, true))
-        logger.info("Первоначальная очистка старых писем MC завершена")
+            repo.finishMigration()
+            repo.clearMigrationRetry()
+            progress(MigrationProgress(processed, estimate, true))
+            logger.info("Первоначальная очистка старых писем MC завершена")
+        } catch (error: Exception) {
+            repo.recordMigrationFailure()
+            throw error
+        }
     }
 
     fun statistics(token: String): Statistics {
