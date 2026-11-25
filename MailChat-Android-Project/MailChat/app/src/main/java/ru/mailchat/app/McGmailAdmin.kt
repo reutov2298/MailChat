@@ -31,7 +31,7 @@ class McGmailAdmin {
             }
             http.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string().orEmpty()
-                if (response.isSuccessful) return@synchronized text
+                if (response.isSuccessful) return@execute text
 
                 val transient403 = response.code == 403 && Regex(
                     "\"reason\"\\s*:\\s*\"(rateLimitExceeded|userRateLimitExceeded|backendError)\"",
@@ -197,8 +197,8 @@ class McGmailAdmin {
             } catch (error: IllegalStateException) {
                 val status = Regex("Gmail batch migration вернул HTTP (429|500|502|503|504)")
                     .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
-                if (status == null || attempt >= 5) throw error
-                val delayMs = minOf(30_000L, 1_000L shl attempt)
+                if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 3) throw error
+                val delayMs = McGmailBatchError.retryDelayMsException(error.message, attempt)
                 Thread.sleep(delayMs)
                 attempt++
             }
@@ -237,7 +237,10 @@ class McGmailAdmin {
                 val missingMessage = GmailTransport.RemoteMessage(requestedId, null, "", "", "", "", 0L, false, emptyMap())
                 return@mapNotNull Candidate(missingMessage, emptySet())
             }
-            if (status !in 200..299) throw IllegalStateException("Gmail batch migration вернул HTTP " + status)
+            if (status !in 200..299) {
+                val failure = McGmailBatchError.fromPart(status, part)
+                throw IllegalStateException("Gmail batch migration: письмо $requestIndex вернуло HTTP $status (${failure.diagnostic()})")
+            }
             val jsonStart = part.indexOf("{", start)
             val jsonEnd = part.lastIndexOf("}")
             if (jsonStart < 0 || jsonEnd < jsonStart) throw IllegalStateException("Пустой ответ Gmail при миграции")
