@@ -144,15 +144,15 @@ class McGmailAdmin {
         val boundary = "mc_verify_" + UUID.randomUUID().toString().replace("-", "")
         val body = buildString {
             ids.forEachIndexed { index, id ->
-                append("--").append(boundary).append("\\r\\nContent-Type: application/http\\r\\n")
-                append("Content-ID: <check-").append(index).append(">\\r\\n\\r\\n")
-                append("GET /gmail/v1/users/me/messages/").append(id).append("?format=metadata HTTP/1.1\\r\\n\\r\\n")
+                append("--").append(boundary).append("\r\nContent-Type: application/http\r\n")
+                append("Content-ID: <check-").append(index).append(">\r\n\r\n")
+                append("GET /gmail/v1/users/me/messages/").append(id).append("?format=metadata HTTP/1.1\r\n\r\n")
             }
-            append("--").append(boundary).append("--\\r\\n")
+            append("--").append(boundary).append("--\r\n")
         }
         val response = call("https://www.googleapis.com/batch/gmail/v1", token, "POST", body,
             "multipart/mixed; boundary=" + boundary)
-        val responseBoundary = Regex("(?m)^--([^\\\\r\\\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
+        val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Не найден разделитель ответа проверки меток")
         val present = linkedMapOf<String, Set<String>>()
         val missing = linkedSetOf<String>()
