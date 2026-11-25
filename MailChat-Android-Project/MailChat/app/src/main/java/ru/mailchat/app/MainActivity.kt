@@ -717,6 +717,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
+                                }
                                 if (syncInProgress) {
                                     Surface(
                                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
