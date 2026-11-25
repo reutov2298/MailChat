@@ -225,7 +225,12 @@ class MainActivity : ComponentActivity() {
                     val ownProfile = runCatching { gmail.ownProfile(t) }.onFailure {
                         logger.error("Google profile: получение не удалось: ${it.javaClass.simpleName}")
                     }.getOrNull()
-                    gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey(), ownProfile?.name, ownProfile?.photoUrl) { bytes -> McCrypto.sign(pair, bytes) }
+                    val sentId = gmail.send(t, accountEmail.ifBlank { repo.myEmail() }, to, text, to.lowercase(), identity.publicKey(), ownProfile?.name, ownProfile?.photoUrl) { bytes -> McCrypto.sign(pair, bytes) }
+                    runCatching {
+                        val labelId = mailManager.ensureLabel(t)
+                        gmailAdmin.modifyMessages(t, listOf(sentId), add = listOf(labelId))
+                    }.onFailure { logger.error("Исходящее письмо отправлено, но метка MC не установлена: ${it.message.orEmpty().take(160)}") }
+                    sentId
                 }
                 logger.add("Сообщение отправлено в Gmail: $id")
                 done(null)
