@@ -119,7 +119,7 @@ class McGmailAdmin {
     }
 
     fun candidatePage(token: String, pageToken: String? = null, max: Int = 50): Pair<List<Candidate>, Page> {
-        val page = listIdsPage(token, query = 'in:anywhere "BEGIN MC DATA"', pageToken = pageToken, max = max)
+        val page = listIdsPage(token, query = "in:anywhere \"BEGIN MC DATA\"", pageToken = pageToken, max = max)
         if (page.ids.isEmpty()) return emptyList<Candidate>() to page
         val boundary = "mc_migrate_" + UUID.randomUUID().toString().replace("-", "")
         val body = buildString {
