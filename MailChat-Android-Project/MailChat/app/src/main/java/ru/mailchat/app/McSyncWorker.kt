@@ -45,11 +45,14 @@ class McSyncWorker(
                 onServerRequest = { logger.server("Запрос Gmail API (фоновый): $it") }
                 onDiagnostic = { logger.debug(it) }
             }
+            val mailManager = McMailManager(McGmailAdmin(), repo, logger)
+            val labelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(token) }
             val since = repo.baseline().coerceAtLeast(1L)
             val incoming = withContext(Dispatchers.IO) {
                 gmail.list(token, "after:$since {in:inbox in:spam}", 50)
             }
             var accepted = 0
+            val archiveIds = mutableListOf<String>()
             var chats = repo.chats().toMutableList()
 
             for (mail in incoming) {
@@ -65,12 +68,8 @@ class McSyncWorker(
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
                 if (chats.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                    repo.markProcessed(mail.id)
+                    archiveIds += mail.id
                     continue
-                }
-
-                if (mail.spam) {
-                    withContext(Dispatchers.IO) { gmail.moveOutOfSpam(token, mail.id) }
                 }
 
                 val message = McMessage(
@@ -91,8 +90,15 @@ class McSyncWorker(
                     chats.add(McChat(parsed.sender, title = mail.senderName.ifBlank { parsed.sender }, messages = listOf(message), senderName = mail.senderName.takeIf { it.isNotBlank() }))
                 }
                 repo.save(chats)
-                repo.markProcessed(mail.id)
+                archiveIds += mail.id
                 accepted++
+            }
+
+            if (archiveIds.isNotEmpty()) {
+                withContext(Dispatchers.IO) {
+                    McGmailAdmin().modifyMessages(token, archiveIds, add = listOf(labelId), remove = listOf("INBOX", "SPAM"))
+                }
+                archiveIds.distinct().forEach { repo.markProcessed(it) }
             }
 
             if (accepted > 0) showIncomingNotification(accepted)
