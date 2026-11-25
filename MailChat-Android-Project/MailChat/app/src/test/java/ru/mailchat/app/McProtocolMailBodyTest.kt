@@ -15,17 +15,19 @@ class McProtocolMailBodyTest {
             senderId = "device-1",
             sender = "sender@example.com",
             recipient = "recipient@example.com",
-            version = "1.0.0-prototype",
+            version = "1.1.1",
             messageType = "text",
             timestamp = (System.currentTimeMillis() / 1000).toString(),
             sequence = "1",
             keyId = "sender@example.com",
             publicKey = McCrypto.publicKey(pair),
-            text = normalized
+            text = normalized,
+            senderName = "Тестовый отправитель",
+            senderAvatarUrl = "https://example.com/avatar.jpg"
         )
         val signature = McCrypto.sign(pair, McProtocol.canonical(input).toByteArray(Charsets.UTF_8))
         val headers = listOf(
-            "X-MC-Protocol: 1",
+            "X-MC-Protocol: 2",
             "X-MC-Message-ID: ${input.messageId}",
             "X-MC-Chat-ID: ${input.chatId}",
             "X-MC-Sender-ID: ${input.senderId}",
@@ -37,6 +39,8 @@ class McProtocolMailBodyTest {
             "X-MC-Sequence: 1",
             "X-MC-Key-ID: ${input.keyId}",
             "X-MC-Public-Key: ${input.publicKey}",
+            "X-MC-Sender-Name: ${java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(input.senderName.toByteArray(Charsets.UTF_8))}",
+            "X-MC-Sender-Avatar: ${java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(input.senderAvatarUrl.toByteArray(Charsets.UTF_8))}",
             "X-MC-Signature-Algorithm: Ed25519",
             "X-MC-Signature: $signature"
         )
@@ -65,6 +69,8 @@ class McProtocolMailBodyTest {
         assertNull(result.reason)
         assertNotNull(result.parsed)
         assertEquals(original, result.parsed?.text)
+        assertEquals("Тестовый отправитель", result.parsed?.senderName)
+        assertEquals("https://example.com/avatar.jpg", result.parsed?.senderAvatarUrl)
     }
 
     @Test fun changedTextFailsSignatureVerification() {
