@@ -113,7 +113,7 @@ class GmailTransport {
         val senderId = "android-${android.os.Build.MODEL}"
         val version = "1.1.1"
         val safeName = senderName.orEmpty().replace(Regex("[\\r\\n]+"), " ").trim().take(200)
-        val safeAvatar = senderAvatarUrl.orEmpty().trim().takeIf { it.startsWith("https://") }?.take(2048).orEmpty()
+        val safeAvatar = senderAvatarUrl.orEmpty().trim().takeIf { it.startsWith("https://") }?.take(700).orEmpty()
         val nameEncoded = Base64.encodeToString(safeName.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val avatarEncoded = Base64.encodeToString(safeAvatar.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val sequence = "1"
@@ -126,7 +126,7 @@ class GmailTransport {
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
         McProtocol.signatureDiagnostics("sender", canonicalInput, signature).forEach { onDiagnostic?.invoke(it) }
         val technical = listOf(
-            "X-MC-Protocol: 1", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
+            "X-MC-Protocol: 2", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
             "X-MC-Sender-ID: $senderId", "X-MC-Sender: $from", "X-MC-Recipient: $to",
             "X-MC-Version: $version", "X-MC-Message-Type: text", "X-MC-Timestamp: $ts",
             "X-MC-Sequence: $sequence", "X-MC-Key-ID: $keyId", "X-MC-Public-Key: $publicKey",
