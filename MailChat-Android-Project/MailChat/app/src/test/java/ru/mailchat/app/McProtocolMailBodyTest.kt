@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class McProtocolMailBodyTest {
-    private fun signedMail(text: String): GmailTransport.RemoteMessage {
+    private fun signedMail(text: String, senderName: String = "Тестовый отправитель", senderAvatarUrl: String = "https://example.com/avatar.jpg"): GmailTransport.RemoteMessage {
         val pair = McCrypto.generate()
         val normalized = McProtocol.normalizeText(text)
         val input = McProtocol.CanonicalInput(
@@ -22,8 +22,8 @@ class McProtocolMailBodyTest {
             keyId = "sender@example.com",
             publicKey = McCrypto.publicKey(pair),
             text = normalized,
-            senderName = "Тестовый отправитель",
-            senderAvatarUrl = "https://example.com/avatar.jpg"
+            senderName = senderName,
+            senderAvatarUrl = senderAvatarUrl
         )
         val signature = McCrypto.sign(pair, McProtocol.canonical(input).toByteArray(Charsets.UTF_8))
         val headers = listOf(
@@ -78,6 +78,13 @@ class McProtocolMailBodyTest {
         val tampered = mail.copy(body = mail.body.replace("original message", "changed message"))
         val result = McProtocol.verifyDetailed(tampered, "recipient@example.com")
         assertEquals("Криптографическая подпись не прошла проверку", result.reason)
+    }
+
+    @Test fun emptyProfileFieldsAreSupported() {
+        val result = McProtocol.verifyDetailed(signedMail("profile unavailable", "", ""), "recipient@example.com")
+        assertNull(result.reason)
+        assertEquals("", result.parsed?.senderName)
+        assertEquals("", result.parsed?.senderAvatarUrl)
     }
 
     @Test fun emptyTextIsSupported() {
