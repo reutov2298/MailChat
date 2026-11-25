@@ -741,7 +741,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            }
             if (showNew) {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
