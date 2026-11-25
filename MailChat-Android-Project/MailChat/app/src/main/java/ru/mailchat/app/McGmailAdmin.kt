@@ -198,6 +198,23 @@ class McGmailAdmin {
     }
 
     fun candidatePage(token: String, pageToken: String? = null, max: Int = 50): Pair<List<Candidate>, Page> {
+        var attempt = 0
+        while (true) {
+            try {
+                return candidatePageOnce(token, pageToken, max)
+            } catch (error: IllegalStateException) {
+                val status = Regex("Gmail batch migration вернул HTTP (429|500|502|503|504)")
+                    .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+                if (status == null || attempt >= 5) throw error
+                val delayMs = minOf(30_000L, 1_000L shl attempt)
+                Thread.sleep(delayMs)
+                attempt++
+            }
+        }
+        throw IllegalStateException("Gmail migration batch retry loop ended unexpectedly")
+    }
+
+    private fun candidatePageOnce(token: String, pageToken: String?, max: Int): Pair<List<Candidate>, Page> {
         val page = listIdsPage(token, query = "in:anywhere \"BEGIN MC DATA\"", pageToken = pageToken, max = max)
         if (page.ids.isEmpty()) return emptyList<Candidate>() to page
         val boundary = "mc_migrate_" + UUID.randomUUID().toString().replace("-", "")
