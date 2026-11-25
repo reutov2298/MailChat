@@ -97,7 +97,7 @@ class GmailTransport {
         val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
         McProtocol.signatureDiagnostics("sender", canonicalInput, signature).forEach { onDiagnostic?.invoke(it) }
-        val technical = listOf(
+        val technical = mutableListOf(
             "X-MC-Protocol: $protocol", "X-MC-Message-ID: $id", "X-MC-Chat-ID: $chatId",
             "X-MC-Sender-ID: $senderId", "X-MC-Sender: $from", "X-MC-Recipient: $to",
             "X-MC-Version: $version", "X-MC-Message-Type: $messageType", "X-MC-Timestamp: $ts",
