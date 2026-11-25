@@ -6,7 +6,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -26,7 +25,7 @@ class GmailTransport {
     private val http = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
 
     data class Profile(val email: String, val historyId: String)
-    data class ContactProfile(val name: String?, val photoUrl: String?)
+    data class OwnProfile(val name: String?, val photoUrl: String?)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String =
@@ -57,28 +56,19 @@ class GmailTransport {
         return Profile(j.optString("emailAddress"), j.optString("historyId"))
     }
 
-    fun contactProfile(token: String, email: String): ContactProfile? {
-        val query = URLEncoder.encode(email.trim(), "UTF-8")
-        val url = "https://people.googleapis.com/v1/people:searchContacts?query=$query&pageSize=10&readMask=names,emailAddresses,photos"
-        val root = JSONObject(request(url, token))
-        val results = root.optJSONArray("results") ?: return null
-        for (i in 0 until results.length()) {
-            val person = results.optJSONObject(i)?.optJSONObject("person") ?: continue
-            val emails = person.optJSONArray("emailAddresses") ?: continue
-            val exactMatch = (0 until emails.length()).any { emails.optJSONObject(it)?.optString("value").equals(email, true) }
-            if (!exactMatch) continue
-            val name = person.optJSONArray("names")?.optJSONObject(0)?.optString("displayName")?.trim()?.takeIf { it.isNotBlank() }
-            val photo = person.optJSONArray("photos")?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
-            return ContactProfile(name, photo)
-        }
-        return null
+    fun ownProfile(token: String): OwnProfile {
+        val root = JSONObject(request("https://openidconnect.googleapis.com/v1/userinfo", token))
+        val name = root.optString("name").trim().take(200).takeIf { it.isNotBlank() }
+        val photo = root.optString("picture").trim().takeIf { it.startsWith("https://") && it.length <= 700 }
+        onDiagnostic?.invoke("Google profile: namePresent=${!name.isNullOrBlank()}, avatarPresent=${!photo.isNullOrBlank()}")
+        return OwnProfile(name, photo)
     }
 
     fun send(
         token: String, from: String, to: String, text: String, chatId: String, publicKey: String,
         messageId: String = UUID.randomUUID().toString(), sequence: Long = 1L,
         messageVersion: Long = 1L, messageType: String = "text",
-        messageTimestamp: Long? = null, sign: (ByteArray) -> String
+        messageTimestamp: Long? = null, senderName: String? = null, senderAvatarUrl: String? = null, sign: (ByteArray) -> String
     ): String {
         val id = messageId
         val ts = messageTimestamp ?: System.currentTimeMillis() / 1000
@@ -87,12 +77,12 @@ class GmailTransport {
         val version = "1.0.0-prototype"
         val sequenceValue = sequence.toString()
         val messageVersionValue = messageVersion.toString()
-        val protocol = if (messageType == "text") "1" else "2"
+        val protocol = "3"
         val keyId = from
         val canonicalInput = McProtocol.CanonicalInput(
             id, chatId, senderId, from, to, version, messageType, ts.toString(),
             sequenceValue, keyId, publicKey, normalizedText, messageVersionValue,
-            protocol == "2", protocol
+            protocol == "2", protocol, senderName.orEmpty().take(200), senderAvatarUrl.orEmpty().take(700)
         )
         val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
@@ -104,7 +94,11 @@ class GmailTransport {
             "X-MC-Sequence: $sequenceValue", "X-MC-Key-ID: $keyId", "X-MC-Public-Key: $publicKey",
             "X-MC-Signature-Algorithm: Ed25519", "X-MC-Signature: $signature"
         )
-        if (protocol == "2") technical.add(10, "X-MC-Message-Version: $messageVersionValue")
+        technical.add(10, "X-MC-Message-Version: $messageVersionValue")
+        val nameHeader = Base64.encodeToString(senderName.orEmpty().take(200).toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val avatarHeader = Base64.encodeToString(senderAvatarUrl.orEmpty().take(700).toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        technical.add("X-MC-Sender-Name: $nameHeader")
+        technical.add("X-MC-Sender-Avatar: $avatarHeader")
         val mime = buildString {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
