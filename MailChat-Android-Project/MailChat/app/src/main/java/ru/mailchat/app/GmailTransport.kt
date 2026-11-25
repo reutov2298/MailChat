@@ -152,6 +152,24 @@ class GmailTransport {
     }
 
     fun list(token: String, query: String, max: Int = 50): List<RemoteMessage> {
+        var attempt = 0
+        while (true) {
+            try {
+                return listOnce(token, query, max)
+            } catch (error: IllegalStateException) {
+                val status = Regex("Gmail batch: письмо \\d+ вернуло HTTP (429|500|502|503|504)")
+                    .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
+                if (status == null || attempt >= 5) throw error
+                val delayMs = minOf(30_000L, 1_000L shl attempt)
+                onDiagnostic?.invoke("Gmail batch: временный HTTP $status; повтор всего пакета через ${delayMs / 1000} сек.")
+                Thread.sleep(delayMs)
+                attempt++
+            }
+        }
+        throw IllegalStateException("Gmail batch retry loop ended unexpectedly")
+    }
+
+    private fun listOnce(token: String, query: String, max: Int): List<RemoteMessage> {
         val q = URLEncoder.encode(query, "UTF-8")
         val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&includeSpamTrash=true&q=$q", token))
         val ids = root.optJSONArray("messages") ?: return emptyList()
