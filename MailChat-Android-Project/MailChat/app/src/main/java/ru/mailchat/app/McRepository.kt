@@ -79,6 +79,19 @@ class McRepository(context: Context) {
     fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
     fun setMcLabelId(value: String) { prefs.edit().putString("gmail_mc_label_id", value).apply() }
 
+    fun pendingOutgoingLabels(): Set<String> =
+        prefs.getStringSet("gmail_mc_pending_outgoing_labels", emptySet())?.toSet() ?: emptySet()
+    fun queueOutgoingLabel(id: String) {
+        val ids = pendingOutgoingLabels().toMutableSet()
+        ids.add(id)
+        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", ids).apply()
+    }
+    fun completeOutgoingLabels(ids: Collection<String>) {
+        val pending = pendingOutgoingLabels().toMutableSet()
+        pending.removeAll(ids.toSet())
+        prefs.edit().putStringSet("gmail_mc_pending_outgoing_labels", pending).apply()
+    }
+
     fun migrationDone(): Boolean = prefs.getBoolean("gmail_mc_migration_done", false)
     fun migrationPageToken(): String? = prefs.getString("gmail_mc_migration_page", null)
     fun migrationProcessed(): Int = prefs.getInt("gmail_mc_migration_processed", 0)
