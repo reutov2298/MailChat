@@ -169,14 +169,31 @@ class GmailTransport {
         val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", batchBody, "multipart/mixed; boundary=$boundary")
         val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
             ?: throw IllegalStateException("Gmail batch response has no boundary")
-        val result = mutableListOf<RemoteMessage>()
+        val resultByIndex = linkedMapOf<Int, RemoteMessage>()
+        var fallbackIndex = 0
         response.split("--$responseBoundary").forEach { part ->
             val httpStart = part.indexOf("HTTP/1.")
             if (httpStart < 0) return@forEach
+            val requestIndex = Regex("(?i)Content-ID:\\s*<[^>]*mc-(\\d+)>")
+                .find(part)?.groupValues?.get(1)?.toIntOrNull() ?: fallbackIndex
+            fallbackIndex++
+            val requestedId = messageIds.getOrNull(requestIndex)
+                ?: throw IllegalStateException("Не удалось сопоставить ответ Gmail с запрошенным письмом")
+            val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
+                ?: throw IllegalStateException("Не удалось определить HTTP-статус письма в Gmail batch")
+            if (status !in 200..299) {
+                throw IllegalStateException("Gmail batch: письмо $requestIndex вернуло HTTP $status")
+            }
             val jsonStart = part.indexOf("{", httpStart)
             val jsonEnd = part.lastIndexOf("}")
-            if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
+            if (jsonStart < 0 || jsonEnd < jsonStart) {
+                throw IllegalStateException("Gmail batch: пустой ответ для письма $requestIndex")
+            }
             val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
+            val returnedId = j.optString("id").takeIf { it.isNotBlank() }
+            if (returnedId != null && returnedId != requestedId) {
+                throw IllegalStateException("Gmail batch: ID ответа не совпадает с запрошенным письмом")
+            }
             val payload = j.optJSONObject("payload")
             val headers = payload?.optJSONArray("headers")
             var from = ""; var to = ""; var subject = ""
@@ -188,13 +205,15 @@ class GmailTransport {
             }
             val labels = j.optJSONArray("labelIds")
             val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
-            result += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
+            resultByIndex[requestIndex] = RemoteMessage(requestedId, j.optString("threadId"), from, to, subject,
                 extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap,
                 parseSenderDisplayName(from))
         }
-        onDiagnostic?.invoke("Gmail batch: запрошено писем=${messageIds.size}, получено=${result.size}")
-        if (result.size != messageIds.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
-        return result
+        onDiagnostic?.invoke("Gmail batch: запрошено писем=${messageIds.size}, получено=${resultByIndex.size}")
+        if (resultByIndex.size != messageIds.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
+        return messageIds.indices.map { index ->
+            resultByIndex[index] ?: throw IllegalStateException("Gmail batch не вернул письмо с индексом $index")
+        }
     }
 
 
