@@ -13,7 +13,7 @@ internal data class McGmailBatchError(
 ) {
     fun isRetryable(): Boolean =
         status == 429 || status in setOf(500, 502, 503, 504) ||
-            (status == 403 && reason in RETRYABLE_403_REASONS)
+            (status == 403 && reason != null && reason in RETRYABLE_403_REASONS)
 
     fun diagnostic(): String {
         val safeReason = reason?.takeIf { it.isNotBlank() } ?: "unknown"
