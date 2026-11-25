@@ -188,14 +188,20 @@ object McProtocol {
                 )
             )
 
-            // Strip only the MIME separator; preserve leading user newlines.
-            var rawText = mail.body.substring(end + finish.length)
-            rawText = when {
-                rawText.startsWith("\r\n\r\n") -> rawText.substring(4)
-                rawText.startsWith("\n\n") -> rawText.substring(2)
-                rawText.startsWith("\r\n") -> rawText.substring(2)
-                rawText.startsWith("\n") -> rawText.substring(1)
-                else -> rawText
+            // New format: message text precedes MC DATA. Legacy format: text follows END marker.
+            // Remove only the single line break added as the separator before/after the technical block.
+            val textBeforeBlock = mail.body.substring(0, start)
+            val textAfterBlock = mail.body.substring(end + finish.length)
+            val rawText = if (textBeforeBlock.isNotEmpty()) {
+                textBeforeBlock.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
+            } else {
+                when {
+                    textAfterBlock.startsWith("\r\n\r\n") -> textAfterBlock.substring(4)
+                    textAfterBlock.startsWith("\n\n") -> textAfterBlock.substring(2)
+                    textAfterBlock.startsWith("\r\n") -> textAfterBlock.substring(2)
+                    textAfterBlock.startsWith("\n") -> textAfterBlock.substring(1)
+                    else -> textAfterBlock
+                }
             }
             val text = normalizeText(rawText)
 
