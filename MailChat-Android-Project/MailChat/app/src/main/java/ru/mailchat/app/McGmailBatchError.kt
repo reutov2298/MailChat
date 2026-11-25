@@ -71,10 +71,9 @@ internal data class McGmailBatchError(
 
         fun isRetryableException(message: String?): Boolean {
             val text = message.orEmpty()
-            val status = Regex("Gmail batch: письмо \\d+ вернуло HTTP (\\d{3})")
+            val status = Regex("Gmail batch(?: migration)?: письмо \\d+ вернуло HTTP (\\d{3})")
                 .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: return false
-            val reason = Regex("reason=([A-Za-z0-9_.-]+)")
-                .find(text)?.groupValues?.get(1)
+            val reason = Regex("reason=([A-Za-z0-9_.-]+)").find(text)?.groupValues?.get(1)
             return McGmailBatchError(status, reason, null).isRetryable()
         }
     }
