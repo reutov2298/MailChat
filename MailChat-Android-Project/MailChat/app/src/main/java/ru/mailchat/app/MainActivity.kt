@@ -121,6 +121,9 @@ class MainActivity : ComponentActivity() {
         val handled = auth.handle(intent) { access, error ->
             if (access != null) {
                 token = access
+                if (auth.hasPermanentDeleteScope()) {
+                    mailDeleteProgress = "Дополнительное разрешение Google получено. Нажмите кнопку удаления ещё раз."
+                }
                 logger.add("Авторизация Google выполнена")
                 authChanged++
                 loadProfileAndSetBaseline()
