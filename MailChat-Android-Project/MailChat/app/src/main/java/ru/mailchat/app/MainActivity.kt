@@ -766,8 +766,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable private fun Conversation(chat: McChat, modifier: Modifier, isSyncing: Boolean, onRefresh: () -> Unit, onSend: (String) -> Unit) {
-        var draft by remember { mutableStateOf("") }
+    @Composable private fun Conversation(
+        chat: McChat,
+        modifier: Modifier,
+        isSyncing: Boolean,
+        onRefresh: () -> Unit,
+        onSend: (String, McMessage?) -> Unit,
+        onDeleteMessage: (McMessage) -> Unit
+    ) {
+        var draft by remember(chat.email) { mutableStateOf("") }
+        var editingMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
+        var actionMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         val listState = rememberLazyListState()
         var topPullDistance by remember(chat.email) { mutableFloatStateOf(0f) }
         val density = LocalDensity.current
@@ -808,41 +817,56 @@ class MainActivity : ComponentActivity() {
                 if (isSyncing) Text("Проверяем почту...", fontSize = 12.sp)
             }
             LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(topRefreshConnection)) {
-                items(chat.messages, key = { it.id }) { message ->
+                items(chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id }), key = { it.id }) { message ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
-                            color = if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            modifier = Modifier
+                                .fillMaxWidth(if (message.deleted) 0.72f else 1f)
+                                .pointerInput(message.id, message.deleted, message.incoming) {
+                                    detectTapGestures(onLongPress = {
+                                        if (!message.incoming && !message.deleted) actionMessage = message
+                                    })
+                                }
+                                .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
+                            color = if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
                                 bottomEnd = if (message.incoming) 18.dp else 5.dp
                             )
                         ) {
-                            Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
-                                if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                Text(message.text)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault())
-                                            .format(Date(message.timestamp * 1000L)),
-                                        fontSize = 10.sp,
-                                        color = Color.LightGray
-                                    )
-                                    if (!message.incoming) {
-                                        Spacer(Modifier.width(4.dp))
-                                        val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
-                                        when (message.state) {
-                                            DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                            DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                            DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
-                                                Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                                Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                            if (message.deleted) {
+                                Text(
+                                    "delete messages",
+                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    fontSize = 12.sp
+                                )
+                            } else {
+                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                    if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
+                                    Text(message.text)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault()).format(Date(message.timestamp * 1000L)),
+                                            fontSize = 10.sp, color = Color.LightGray
+                                        )
+                                        if (!message.incoming) {
+                                            Spacer(Modifier.width(4.dp))
+                                            val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
+                                            when (message.state) {
+                                                DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
+                                                    Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                    Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                }
+                                                DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                             }
-                                            DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
                                         }
                                     }
                                 }
@@ -850,6 +874,12 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     Spacer(Modifier.height(7.dp))
+                }
+            }
+            if (editingMessage != null) {
+                Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Редактирование сообщения", modifier = Modifier.weight(1f), color = Blue, fontSize = 12.sp)
+                    TextButton(onClick = { editingMessage = null; draft = "" }) { Text("Отмена") }
                 }
             }
             Surface(
@@ -872,11 +902,39 @@ class MainActivity : ComponentActivity() {
                             focusedContainerColor = Color.Transparent
                         )
                     )
-                    IconButton(onClick = { if (draft.isNotBlank()) { scrollAfterSend = true; onSend(draft.trim()); draft = "" } }, enabled = draft.isNotBlank()) {
+                    IconButton(onClick = {
+                        if (draft.isNotBlank()) {
+                            scrollAfterSend = true
+                            onSend(draft.trim(), editingMessage)
+                            draft = ""
+                            editingMessage = null
+                        }
+                    }, enabled = draft.isNotBlank()) {
                         Icon(Icons.Default.Send, "Отправить", tint = if (draft.isNotBlank()) Blue else Color.Gray)
                     }
                 }
             }
+        }
+        actionMessage?.let { selectedMessage ->
+            AlertDialog(
+                onDismissRequest = { actionMessage = null },
+                title = { Text("Сообщение") },
+                text = { Text("Что сделать с этим сообщением?") },
+                confirmButton = {
+                    Row {
+                        TextButton(onClick = {
+                            editingMessage = selectedMessage
+                            draft = selectedMessage.text
+                            actionMessage = null
+                        }) { Text("Редактировать") }
+                        TextButton(onClick = {
+                            onDeleteMessage(selectedMessage)
+                            actionMessage = null
+                        }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
+            )
         }
     }
 
