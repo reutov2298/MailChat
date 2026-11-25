@@ -193,7 +193,10 @@ class McGmailAdmin {
         val candidates = response.split("--" + responseBoundary).mapNotNull { part ->
             val start = part.indexOf("HTTP/1.")
             if (start < 0) return@mapNotNull null
-            val requestedId = page.ids.getOrNull(fallbackIndex++)
+            val requestIndex = Regex("(?i)Content-ID:\\s*<[^>]*mc-(\\d+)>").find(part)
+                ?.groupValues?.get(1)?.toIntOrNull() ?: fallbackIndex
+            fallbackIndex++
+            val requestedId = page.ids.getOrNull(requestIndex)
                 ?: throw IllegalStateException("Не удалось сопоставить ответ Gmail с ID письма")
             val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part)?.groupValues?.get(1)?.toIntOrNull()
                 ?: throw IllegalStateException("Не удалось определить HTTP-статус письма при миграции")
