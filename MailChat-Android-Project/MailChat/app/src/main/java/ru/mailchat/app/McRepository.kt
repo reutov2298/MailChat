@@ -48,9 +48,9 @@ class McRepository(context: Context) {
             .putString("own_profile_avatar", avatar.orEmpty().take(700)).apply()
     }
 
-    fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 60)
-    fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 180)
-    fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 900)
+    fun openIntervalSeconds(): Int = prefs.getInt("sync_open_seconds", 10)
+    fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 30)
+    fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 60)
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
 
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
