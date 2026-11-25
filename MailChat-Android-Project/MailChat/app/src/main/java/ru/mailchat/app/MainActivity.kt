@@ -841,7 +841,9 @@ class MainActivity : ComponentActivity() {
                                 .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
                                 .pointerInput(message.id, message.deleted, message.incoming) {
                                     detectTapGestures(onLongPress = {
-                                        if (!message.incoming && !message.deleted) actionMessage = message
+                                        if (!message.incoming && !message.deleted &&
+                                            message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED)
+                                        ) actionMessage = message
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
