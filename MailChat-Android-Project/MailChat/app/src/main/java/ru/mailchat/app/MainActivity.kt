@@ -169,7 +169,14 @@ class MainActivity : ComponentActivity() {
                 }
                 logger.add("Gmail подключён: ${profile.email}")
                 try {
-                    withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
+                    val mcLabelId = withContext(Dispatchers.IO) { mailManager.ensureLabel(t) }
+                    val pendingOutbound = repo.pendingOutgoingLabels()
+                    if (pendingOutbound.isNotEmpty()) {
+                        runCatching {
+                            withContext(Dispatchers.IO) { gmailAdmin.modifyMessages(t, pendingOutbound.toList(), add = listOf(mcLabelId)) }
+                        }.onSuccess { repo.completeOutgoingLabels(pendingOutbound) }
+                            .onFailure { logger.error("Не удалось повторно пометить исходящие письма MC: " + it.message.orEmpty().take(180)) }
+                    }
                     if (!repo.migrationDone()) {
                         mailMigrationBusy = true
                         mailMigrationText = "Идёт первоначальная очистка старых писем MC..."
@@ -229,7 +236,10 @@ class MainActivity : ComponentActivity() {
                     runCatching {
                         val labelId = mailManager.ensureLabel(t)
                         gmailAdmin.modifyMessages(t, listOf(sentId), add = listOf(labelId))
-                    }.onFailure { logger.error("Исходящее письмо отправлено, но метка MC не установлена: ${it.message.orEmpty().take(160)}") }
+                    }.onFailure {
+                        repo.queueOutgoingLabel(sentId)
+                        logger.error("Исходящее письмо отправлено, но метка MC не установлена: ${it.message.orEmpty().take(160)}")
+                    }
                     sentId
                 }
                 logger.add("Сообщение отправлено в Gmail: $id")
