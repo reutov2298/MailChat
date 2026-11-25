@@ -257,24 +257,37 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val current = repo.chats().toMutableList()
-                    if (current.any { chat -> chat.messages.any { it.id == parsed.messageId } }) {
-                        repo.markProcessed(mail.id)
-                        skipped++
-                        continue
-                    }
-
                     val index = current.indexOfFirst { it.email.equals(parsed.sender, true) }
                     val message = McMessage(
                         id = parsed.messageId,
                         chatId = parsed.chatId,
                         sender = parsed.sender,
                         recipient = parsed.recipient,
-                        text = parsed.text,
+                        text = if (parsed.messageType == "delete") "" else parsed.text,
                         timestamp = parsed.timestamp,
                         incoming = true,
                         state = DeliveryState.DELIVERED,
-                        recoveredFromSpam = mail.spam
+                        recoveredFromSpam = mail.spam,
+                        sequence = parsed.sequence,
+                        version = parsed.messageVersion,
+                        deleted = parsed.messageType == "delete"
                     )
+                    val existingIndex = if (index >= 0) current[index].messages.indexOfFirst { it.id == parsed.messageId } else -1
+                    if (existingIndex >= 0) {
+                        val existing = current[index].messages[existingIndex]
+                        if (parsed.messageVersion > existing.version) {
+                            val updatedMessages = current[index].messages.toMutableList()
+                            updatedMessages[existingIndex] = existing.copy(
+                                text = message.text, version = parsed.messageVersion,
+                                sequence = parsed.sequence, deleted = message.deleted
+                            )
+                            current[index] = current[index].copy(messages = repo.orderedMessages(updatedMessages))
+                        } else {
+                            repo.markProcessed(mail.id)
+                            skipped++
+                            continue
+                        }
+                    }
 
                     val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
                     val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
@@ -294,7 +307,7 @@ class MainActivity : ComponentActivity() {
                             title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
                             senderName = resolvedName ?: existing.senderName,
                             avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
-                            messages = existing.messages + message
+                            messages = repo.orderedMessages(existing.messages + message)
                         )
                     } else {
                         current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
