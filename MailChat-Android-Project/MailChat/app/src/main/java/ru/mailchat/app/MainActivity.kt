@@ -552,8 +552,8 @@ class MainActivity : ComponentActivity() {
                                 }
                             }) { Text("Продолжить с Google") }
                         }
-                        if (token != null) OutlinedButton(onClick = { auth.disconnect(); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
-                        Text("Для загрузки имён и фотографий из Google Контактов после обновления переподключите аккаунт: отключите его и подключите снова.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (token != null) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
+                        Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
