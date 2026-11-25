@@ -648,10 +648,16 @@ class MainActivity : ComponentActivity() {
                                         try {
                                             val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
                                             mailStatsText = buildString {
-                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                if (stats.uniqueMessages != null) {
+                                                    append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                } else {
+                                                    append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
+                                                }
                                                 stats.labels.forEach { label ->
                                                     append(label.name).append(": ").append(label.total)
-                                                        .append(" (непрочитанных: ").append(label.unread).append(")\n")
+                                                    if (label.error != null) append(" — ошибка: ").append(label.error)
+                                                    else append(" (непрочитанных: ").append(label.unread).append(")")
+                                                    append("\n")
                                                 }
                                             }
                                         } catch (e: Exception) {
@@ -835,7 +841,7 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                     mailDeleteProgress = if (result.changed) {
-                                        "Список писем изменился после подсчёта. Ничего не удалено — выполните поиск заново."
+                                        "Список писем изменился. Удалено до обнаружения изменения: " + result.deleted + ". Остальные письма не удалялись; выполните поиск заново."
                                     } else {
                                         "Безвозвратно удалено писем MC: " + result.deleted
                                     }
@@ -844,10 +850,16 @@ class MainActivity : ComponentActivity() {
                                         runCatching {
                                             val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
                                             mailStatsText = buildString {
-                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                if (stats.uniqueMessages != null) {
+                                                    append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                } else {
+                                                    append("Общее число уникальных писем: ошибка — ").append(stats.uniqueMessagesError).append("\n")
+                                                }
                                                 stats.labels.forEach { label ->
                                                     append(label.name).append(": ").append(label.total)
-                                                        .append(" (непрочитанных: ").append(label.unread).append(")\n")
+                                                    if (label.error != null) append(" — ошибка: ").append(label.error)
+                                                    else append(" (непрочитанных: ").append(label.unread).append(")")
+                                                    append("\n")
                                                 }
                                             }
                                         }.onFailure {
