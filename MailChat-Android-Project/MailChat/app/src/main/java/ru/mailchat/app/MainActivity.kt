@@ -389,6 +389,8 @@ class MainActivity : ComponentActivity() {
         var editContactProfile by remember { mutableStateOf(false) }
         var contactName by remember { mutableStateOf("") }
         var status by remember { mutableStateOf("") }
+        var deleteSnapshot by remember { mutableStateOf<List<String>>(emptyList()) }
+        var showDeleteConfirm by remember { mutableStateOf(false) }
         var logText by remember { mutableStateOf(logger.read()) }
         var logSize by remember { mutableLongStateOf(logger.sizeBytes()) }
         var openSeconds by remember { mutableStateOf(repo.openIntervalSeconds().toString()) }
@@ -591,6 +593,103 @@ class MainActivity : ComponentActivity() {
                         ) { Text(if (syncInProgress) "Проверяем..." else "Проверить новые сообщения") }
                         Text("Старые письма не импортируются. Точка начала синхронизации устанавливается при первом подключении.", fontSize = 13.sp)
                         HorizontalDivider()
+                        Text("Управление письмами MC", fontWeight = FontWeight.Bold)
+                        Text(
+                            mailMigrationText.ifBlank {
+                                if (repo.migrationDone()) "Первоначальная очистка старых писем MC завершена."
+                                else "Первоначальная очистка ещё не завершена."
+                            },
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Button(
+                            onClick = {
+                                val currentToken = token
+                                if (currentToken != null && !mailMigrationBusy) {
+                                    mailMigrationBusy = true
+                                    lifecycleScope.launch {
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                mailManager.migrateOldMessages(currentToken, accountEmail.ifBlank { repo.myEmail() }) { p ->
+                                                    runOnUiThread {
+                                                        mailMigrationText = if (p.complete) "Очистка завершена. Проверено: " + p.processed
+                                                        else "Очистка: проверено " + p.processed + " из примерно " + p.estimate
+                                                    }
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            mailMigrationText = "Ошибка очистки: " + e.message.orEmpty().take(180)
+                                            logger.error("Ошибка повторной миграции MC: " + e.message.orEmpty().take(180))
+                                        } finally {
+                                            mailMigrationBusy = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = token != null && !mailMigrationBusy && !repo.migrationDone()
+                        ) { Text(if (mailMigrationBusy) "Очистка..." else "Продолжить первоначальную очистку") }
+                        Button(
+                            onClick = {
+                                val currentToken = token
+                                if (currentToken != null && !mailStatsBusy) {
+                                    mailStatsBusy = true
+                                    mailStatsText = "Получаем статистику Gmail..."
+                                    lifecycleScope.launch {
+                                        try {
+                                            val stats = withContext(Dispatchers.IO) { mailManager.statistics(currentToken) }
+                                            mailStatsText = buildString {
+                                                append("Всего уникальных писем: ").append(stats.uniqueMessages).append("\n")
+                                                stats.labels.forEach { label ->
+                                                    append(label.name).append(": ").append(label.total)
+                                                        .append(" (непрочитанных: ").append(label.unread).append(")\n")
+                                                }
+                                            }
+                                        } catch (e: Exception) {
+                                            mailStatsText = "Ошибка получения статистики: " + e.message.orEmpty().take(180)
+                                        } finally {
+                                            mailStatsBusy = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = token != null && !mailStatsBusy
+                        ) { Text(if (mailStatsBusy) "Получаем статистику..." else "Статистика всех папок") }
+                        if (mailStatsText.isNotBlank()) {
+                            Text(mailStatsText, fontSize = 12.sp, lineHeight = 17.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Button(
+                            onClick = {
+                                val currentToken = token
+                                if (currentToken == null || mailDeleteBusy) return@Button
+                                if (!auth.hasPermanentDeleteScope()) {
+                                    mailDeleteProgress = "Для этой операции требуется отдельное разрешение Google на полный доступ к Gmail. Сейчас откроется повторное согласие."
+                                    try {
+                                        auth.start(this@MainActivity, includePermanentDeleteScope = true)
+                                    } catch (e: Exception) {
+                                        mailDeleteProgress = "Не удалось запросить разрешение: " + e.message.orEmpty().take(160)
+                                    }
+                                } else {
+                                    mailDeleteBusy = true
+                                    lifecycleScope.launch {
+                                        try {
+                                            deleteSnapshot = withContext(Dispatchers.IO) { mailManager.previewDelete(currentToken) }
+                                            showDeleteConfirm = deleteSnapshot.isNotEmpty()
+                                            mailDeleteProgress = if (deleteSnapshot.isEmpty()) "Писем с меткой MC не найдено."
+                                                else "Найдено писем MC: " + deleteSnapshot.size
+                                        } catch (e: Exception) {
+                                            mailDeleteProgress = "Ошибка поиска писем MC: " + e.message.orEmpty().take(180)
+                                        } finally {
+                                            mailDeleteBusy = false
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = token != null && !mailDeleteBusy
+                        ) { Text(if (mailDeleteBusy) "Подготовка..." else "Удалить сообщения MC безвозвратно") }
+                        if (mailDeleteProgress.isNotBlank()) {
+                            Text(mailDeleteProgress, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
                         Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -702,7 +801,52 @@ class MainActivity : ComponentActivity() {
                 }
             }
             }
-            if (showNew) {
+            if (showDeleteConfirm) {
+            AlertDialog(
+                onDismissRequest = { if (!mailDeleteBusy) showDeleteConfirm = false },
+                title = { Text("Безвозвратно удалить письма MC?") },
+                text = {
+                    Text("Будет удалено без возможности восстановления: " + deleteSnapshot.size +
+                        " писем с меткой MC. Локальные чаты и сообщения на телефоне останутся. Обычная почта не затрагивается.")
+                },
+                confirmButton = {
+                    TextButton(
+                        enabled = !mailDeleteBusy,
+                        onClick = {
+                            val currentToken = token ?: return@TextButton
+                            showDeleteConfirm = false
+                            mailDeleteBusy = true
+                            mailDeleteProgress = "Удаление..."
+                            lifecycleScope.launch {
+                                try {
+                                    val result = withContext(Dispatchers.IO) {
+                                        mailManager.deleteConfirmedSnapshot(currentToken, deleteSnapshot) { done, total ->
+                                            runOnUiThread { mailDeleteProgress = "Удалено " + done + " из " + total }
+                                        }
+                                    }
+                                    mailDeleteProgress = if (result.changed) {
+                                        "Список писем изменился после подсчёта. Ничего не удалено — выполните поиск заново."
+                                    } else {
+                                        "Безвозвратно удалено писем MC: " + result.deleted
+                                    }
+                                    deleteSnapshot = emptyList()
+                                    mailStatsText = ""
+                                } catch (e: Exception) {
+                                    mailDeleteProgress = "Удаление прервано; прогресс сохранён: " + e.message.orEmpty().take(180)
+                                    logger.error("Ошибка безвозвратного удаления MC: " + e.message.orEmpty().take(200))
+                                } finally {
+                                    mailDeleteBusy = false
+                                }
+                            }
+                        }
+                    ) { Text("Удалить безвозвратно") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDeleteConfirm = false }) { Text("Отмена") }
+                }
+            )
+        }
+        if (showNew) {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
                 AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
