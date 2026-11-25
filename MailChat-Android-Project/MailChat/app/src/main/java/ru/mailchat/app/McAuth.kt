@@ -47,7 +47,15 @@ class McAuth(private val context: Context) {
         }
         service.performTokenRequest(response.createTokenExchangeRequest()) { tokenResponse, tokenError ->
             if (tokenResponse != null) {
-                val state = AuthState(response, tokenResponse, tokenError)
+                val saved = prefs.getString("auth_state", null)
+                val state = if (saved.isNullOrBlank()) {
+                    AuthState(response, tokenResponse, tokenError)
+                } else {
+                    AuthState.jsonDeserialize(saved).apply {
+                        update(response, null)
+                        update(tokenResponse, tokenError)
+                    }
+                }
                 prefs.edit().putString("auth_state", state.jsonSerializeString()).apply()
                 callback(tokenResponse.accessToken, null)
             } else {
