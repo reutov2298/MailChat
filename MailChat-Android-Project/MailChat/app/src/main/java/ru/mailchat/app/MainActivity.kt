@@ -189,7 +189,7 @@ class MainActivity : ComponentActivity() {
                                     mailMigrationText = if (p.complete) {
                                         "Первоначальная очистка завершена. Проверено: ${p.processed}"
                                     } else {
-                                        "Первоначальная очистка: проверено ${p.processed} из примерно ${p.estimate}"
+                                        "Первоначальная очистка: проверено ${p.processed} из примерно ${p.estimate}; осталось около ${maxOf(p.estimate - p.processed, 0)}"
                                     }
                                 }
                             }
@@ -206,7 +206,7 @@ class MainActivity : ComponentActivity() {
                         mailDeleteBusy = true
                         withContext(Dispatchers.IO) {
                             mailManager.resumeConfirmedDelete(t) { done, total ->
-                                runOnUiThread { mailDeleteProgress = "Удалено ${done} из ${total}" }
+                                runOnUiThread { mailDeleteProgress = "Удалено ${done} из ${total}; осталось ${total - done}" }
                             }
                         }
                     }.onFailure { logger.error("Ошибка продолжения удаления MC: ${it.message.orEmpty().take(200)}") }
@@ -626,7 +626,7 @@ class MainActivity : ComponentActivity() {
                                                 mailManager.migrateOldMessages(currentToken, accountEmail.ifBlank { repo.myEmail() }) { p ->
                                                     runOnUiThread {
                                                         mailMigrationText = if (p.complete) "Очистка завершена. Проверено: " + p.processed
-                                                        else "Очистка: проверено " + p.processed + " из примерно " + p.estimate
+                                                        else "Очистка: проверено " + p.processed + " из примерно " + p.estimate + "; осталось около " + maxOf(p.estimate - p.processed, 0)
                                                     }
                                                 }
                                             }
@@ -840,7 +840,7 @@ class MainActivity : ComponentActivity() {
                                 try {
                                     val result = withContext(Dispatchers.IO) {
                                         mailManager.deleteConfirmedSnapshot(currentToken, deleteSnapshot) { done, total ->
-                                            runOnUiThread { mailDeleteProgress = "Удалено " + done + " из " + total }
+                                            runOnUiThread { mailDeleteProgress = "Удалено " + done + " из " + total + "; осталось " + (total - done) }
                                         }
                                     }
                                     mailDeleteProgress = if (result.changed) {
