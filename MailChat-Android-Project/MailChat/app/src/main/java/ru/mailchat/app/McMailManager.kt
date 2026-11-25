@@ -91,14 +91,17 @@ class McMailManager(
         var index = repo.deleteJobIndex().coerceIn(0, ids.size)
         while (index < ids.size) {
             val chunk = ids.subList(index, minOf(index + 10, ids.size))
-            val currentLabels = admin.messageLabelIds(token, chunk)
-            val changedIds = chunk.filter { id -> labelId !in (currentLabels[id] ?: emptySet()) }
+            val labelSnapshot = admin.messageLabelIds(token, chunk)
+            val changedIds = chunk.filter { id ->
+                id !in labelSnapshot.missing && labelId !in (labelSnapshot.present[id] ?: emptySet())
+            }
             if (changedIds.isNotEmpty()) {
                 repo.clearDeleteJob()
                 logger.error("Удаление MC остановлено: метка MC изменилась у " + changedIds.size + " писем из текущей партии")
                 return DeleteResult(index, changed = true)
             }
-            admin.batchDelete(token, chunk)
+            val stillPresent = chunk.filter { it !in labelSnapshot.missing }
+            if (stillPresent.isNotEmpty()) admin.batchDelete(token, stillPresent)
             index += chunk.size
             repo.updateDeleteJobIndex(index)
             progress(index, ids.size)
