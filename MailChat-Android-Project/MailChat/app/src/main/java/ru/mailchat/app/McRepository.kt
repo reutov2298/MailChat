@@ -76,6 +76,36 @@ class McRepository(context: Context) {
         prefs.edit().putStringSet("processed", set).apply()
     }
 
+    fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
+    fun setMcLabelId(value: String) { prefs.edit().putString("gmail_mc_label_id", value).apply() }
+
+    fun migrationDone(): Boolean = prefs.getBoolean("gmail_mc_migration_done", false)
+    fun migrationPageToken(): String? = prefs.getString("gmail_mc_migration_page", null)
+    fun migrationProcessed(): Int = prefs.getInt("gmail_mc_migration_processed", 0)
+    fun migrationEstimate(): Int = prefs.getInt("gmail_mc_migration_estimate", 0)
+    fun saveMigrationCheckpoint(pageToken: String?, processed: Int, estimate: Int) {
+        prefs.edit().putString("gmail_mc_migration_page", pageToken)
+            .putInt("gmail_mc_migration_processed", processed)
+            .putInt("gmail_mc_migration_estimate", estimate).apply()
+    }
+    fun finishMigration() {
+        prefs.edit().putBoolean("gmail_mc_migration_done", true)
+            .remove("gmail_mc_migration_page").apply()
+    }
+
+    fun saveDeleteJob(ids: List<String>, nextIndex: Int = 0) {
+        prefs.edit().putString("gmail_mc_delete_ids", JSONArray(ids.distinct()).toString())
+            .putInt("gmail_mc_delete_index", nextIndex).putBoolean("gmail_mc_delete_confirmed", true).apply()
+    }
+    fun deleteJobIds(): List<String> = runCatching {
+        val array = JSONArray(prefs.getString("gmail_mc_delete_ids", "[]"))
+        (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+    }.getOrDefault(emptyList())
+    fun deleteJobIndex(): Int = prefs.getInt("gmail_mc_delete_index", 0)
+    fun deleteJobConfirmed(): Boolean = prefs.getBoolean("gmail_mc_delete_confirmed", false)
+    fun updateDeleteJobIndex(index: Int) { prefs.edit().putInt("gmail_mc_delete_index", index).apply() }
+    fun clearDeleteJob() { prefs.edit().remove("gmail_mc_delete_ids").remove("gmail_mc_delete_index").putBoolean("gmail_mc_delete_confirmed", false).apply() }
+
     fun restoreChat(email: String) {
         val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.remove(email.trim().lowercase())
