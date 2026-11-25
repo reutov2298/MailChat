@@ -178,14 +178,13 @@ object McProtocol {
                 )
             )
 
-            // Strip only the MIME separator; preserve leading user newlines.
-            var rawText = mail.body.substring(end + finish.length)
-            rawText = when {
-                rawText.startsWith("\r\n\r\n") -> rawText.substring(4)
-                rawText.startsWith("\n\n") -> rawText.substring(2)
-                rawText.startsWith("\r\n") -> rawText.substring(2)
-                rawText.startsWith("\n") -> rawText.substring(1)
-                else -> rawText
+            // The only supported format places the signed message text before MC DATA.
+            // Remove exactly the single CRLF inserted as the structural separator by the sender.
+            var rawText = mail.body.substring(0, start)
+            if (rawText.endsWith("\r\n")) {
+                rawText = rawText.dropLast(2)
+            } else if (rawText.endsWith("\n") || rawText.endsWith("\r")) {
+                rawText = rawText.dropLast(1)
             }
             val text = normalizeText(rawText)
 
