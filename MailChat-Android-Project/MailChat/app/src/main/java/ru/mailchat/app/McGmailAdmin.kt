@@ -47,6 +47,7 @@ class McGmailAdmin {
                 val delay = McGmailRetryPolicy.delayMs(response.code, parsed.reason, parsed.message, attempt,
                     response.header("Retry-After")?.toLongOrNull())
                 attempt++
+                McGmailRequestGate.deferFor(delay)
                 Thread.sleep(delay)
             }
         }
@@ -195,10 +196,9 @@ class McGmailAdmin {
             try {
                 return candidatePageOnce(token, pageToken, max)
             } catch (error: IllegalStateException) {
-                val status = Regex("Gmail batch migration вернул HTTP (429|500|502|503|504)")
-                    .find(error.message.orEmpty())?.groupValues?.get(1)?.toIntOrNull()
                 if (!McGmailBatchError.isRetryableException(error.message) || attempt >= 3) throw error
                 val delayMs = McGmailBatchError.retryDelayMsException(error.message, attempt)
+                McGmailRequestGate.deferFor(delayMs)
                 Thread.sleep(delayMs)
                 attempt++
             }
