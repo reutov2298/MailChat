@@ -72,7 +72,7 @@ object McProtocol {
         "x-mc-sender-id", "x-mc-sender", "x-mc-recipient",
         "x-mc-version", "x-mc-message-type", "x-mc-timestamp",
         "x-mc-sequence", "x-mc-key-id", "x-mc-public-key",
-        "x-mc-sender-name", "x-mc-sender-avatar", "x-mc-signature-algorithm", "x-mc-signature"
+        "x-mc-signature-algorithm", "x-mc-signature"
     )
 
     fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? {
