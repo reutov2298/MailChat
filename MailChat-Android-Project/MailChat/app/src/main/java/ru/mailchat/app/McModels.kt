@@ -13,7 +13,10 @@ data class McMessage(
     val timestamp: Long = System.currentTimeMillis() / 1000,
     val incoming: Boolean,
     val state: DeliveryState = DeliveryState.QUEUED,
-    val recoveredFromSpam: Boolean = false
+    val recoveredFromSpam: Boolean = false,
+    val sequence: Long = 0L,
+    val version: Long = 1L,
+    val deleted: Boolean = false
 )
 
 data class McChat(
