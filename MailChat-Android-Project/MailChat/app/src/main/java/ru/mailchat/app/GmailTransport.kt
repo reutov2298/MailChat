@@ -27,6 +27,7 @@ class GmailTransport {
 
     data class Profile(val email: String, val historyId: String)
     data class ContactProfile(val name: String?, val photoUrl: String?)
+    data class OwnProfile(val name: String?, val photoUrl: String?)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String =
@@ -65,6 +66,14 @@ class GmailTransport {
         return Profile(j.optString("emailAddress"), j.optString("historyId"))
     }
 
+    fun ownProfile(token: String): OwnProfile {
+        val root = JSONObject(request("https://openidconnect.googleapis.com/v1/userinfo", token))
+        val name = root.optString("name").trim().takeIf { it.isNotBlank() }
+        val photo = root.optString("picture").trim().takeIf { it.startsWith("https://") }
+        onDiagnostic?.invoke("Google profile: namePresent=${!name.isNullOrBlank()}, avatarPresent=${!photo.isNullOrBlank()}")
+        return OwnProfile(name, photo)
+    }
+
     fun contactProfile(token: String, email: String): ContactProfile? {
         onDiagnostic?.invoke("People API: поиск контакта начат; emailProvided=${email.isNotBlank()}")
         val query = URLEncoder.encode(email.trim(), "UTF-8")
@@ -97,17 +106,21 @@ class GmailTransport {
         return null
     }
 
-    fun send(token: String, from: String, to: String, text: String, chatId: String, publicKey: String, sign: (ByteArray) -> String): String {
+    fun send(token: String, from: String, to: String, text: String, chatId: String, publicKey: String, senderName: String?, senderAvatarUrl: String?, sign: (ByteArray) -> String): String {
         val id = UUID.randomUUID().toString()
         val ts = System.currentTimeMillis() / 1000
         val normalizedText = McProtocol.normalizeText(text)
         val senderId = "android-${android.os.Build.MODEL}"
-        val version = "1.0.0-prototype"
+        val version = "1.1.1"
+        val safeName = senderName.orEmpty().replace(Regex("[\\r\\n]+"), " ").trim().take(200)
+        val safeAvatar = senderAvatarUrl.orEmpty().trim().takeIf { it.startsWith("https://") }?.take(2048).orEmpty()
+        val nameEncoded = Base64.encodeToString(safeName.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+        val avatarEncoded = Base64.encodeToString(safeAvatar.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val sequence = "1"
         val keyId = from
         val canonicalInput = McProtocol.CanonicalInput(
             id, chatId, senderId, from, to, version, "text", ts.toString(),
-            sequence, keyId, publicKey, normalizedText
+            sequence, keyId, publicKey, normalizedText, safeName, safeAvatar
         )
         val canonical = McProtocol.canonical(canonicalInput)
         val signature = sign(canonical.toByteArray(StandardCharsets.UTF_8))
@@ -117,10 +130,12 @@ class GmailTransport {
             "X-MC-Sender-ID: $senderId", "X-MC-Sender: $from", "X-MC-Recipient: $to",
             "X-MC-Version: $version", "X-MC-Message-Type: text", "X-MC-Timestamp: $ts",
             "X-MC-Sequence: $sequence", "X-MC-Key-ID: $keyId", "X-MC-Public-Key: $publicKey",
+            "X-MC-Sender-Name: $nameEncoded", "X-MC-Sender-Avatar: $avatarEncoded",
             "X-MC-Signature-Algorithm: Ed25519", "X-MC-Signature: $signature"
         )
         val mime = buildString {
-            append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
+            val displayName = if (safeName.isBlank()) from else "=?UTF-8?B?${Base64.encodeToString(safeName.toByteArray(StandardCharsets.UTF_8), Base64.NO_WRAP)}?= <$from>"
+            append("From: $displayName\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
             technical.forEach { append(it).append("\r\n") }
             append("\r\n")
