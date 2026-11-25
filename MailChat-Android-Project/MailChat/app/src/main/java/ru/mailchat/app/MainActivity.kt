@@ -157,6 +157,13 @@ class MainActivity : ComponentActivity() {
             try {
                 logger.add("Запрос профиля Gmail")
                 val profile = withContext(Dispatchers.IO) { gmail.profile(t) }
+                val ownProfile = runCatching { withContext(Dispatchers.IO) { gmail.ownProfile(t) } }
+                    .onFailure { logger.error("Не удалось получить профиль Google: ${it.javaClass.simpleName}") }
+                    .getOrNull()
+                if (ownProfile != null) {
+                    repo.setOwnProfile(ownProfile.name, ownProfile.photoUrl)
+                    logger.add("Профиль Google сохранён локально")
+                }
                 accountEmail = profile.email
                 repo.setEmail(profile.email)
                 authResolving = false
@@ -190,7 +197,9 @@ class MainActivity : ComponentActivity() {
                         message.chatId, identity.publicKey(),
                         messageId = message.id, sequence = message.sequence,
                         messageVersion = message.version, messageType = messageType,
-                        messageTimestamp = message.timestamp
+                        messageTimestamp = message.timestamp,
+                        senderName = repo.ownProfileName(),
+                        senderAvatarUrl = repo.ownProfileAvatar()
                     ) { bytes -> McCrypto.sign(pair, bytes) }
                 }
                 logger.add("Событие MC отправлено в Gmail: $id; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
@@ -317,30 +326,20 @@ class MainActivity : ComponentActivity() {
                         }
                     }
 
-                    val incomingName = mail.senderName.trim().takeIf { it.isNotBlank() }
-                    val needsContactProfile = index < 0 || current[index].avatarUrl.isNullOrBlank() ||
-                        (incomingName == null && current[index].senderName.isNullOrBlank())
-                    val contactProfile = if (needsContactProfile) {
-                        try {
-                            withContext(Dispatchers.IO) { gmail.contactProfile(t, parsed.sender) }
-                        } catch (e: Exception) {
-                            logger.debug("Профиль контакта недоступен для ${parsed.sender}: ${e.message.orEmpty().take(120)}")
-                            null
-                        }
-                    } else null
-                    val resolvedName = incomingName ?: contactProfile?.name
+                    val incomingName = parsed.senderName.trim().takeIf { it.isNotBlank() }
+                    val incomingAvatar = parsed.senderAvatarUrl.trim().takeIf { it.startsWith("https://") }
                     if (index >= 0) {
                         val existing = current[index]
                         current[index] = existing.copy(
-                            title = if (!existing.nameManuallySet && resolvedName != null) resolvedName else existing.title,
-                            senderName = resolvedName ?: existing.senderName,
-                            avatarUrl = contactProfile?.photoUrl ?: existing.avatarUrl,
+                            title = if (!existing.nameManuallySet && incomingName != null) incomingName else existing.title,
+                            senderName = incomingName ?: existing.senderName,
+                            avatarUrl = incomingAvatar ?: existing.avatarUrl,
                             messages = if (existingIndex >= 0) existing.messages else repo.orderedMessages(existing.messages + message)
                         )
                     } else {
-                        current.add(McChat(parsed.sender, title = resolvedName ?: parsed.sender,
-                            messages = listOf(message), senderName = resolvedName,
-                            avatarUrl = contactProfile?.photoUrl))
+                        current.add(McChat(parsed.sender, title = incomingName ?: parsed.sender,
+                            messages = listOf(message), senderName = incomingName,
+                            avatarUrl = incomingAvatar))
                     }
 
                     repo.save(current)
