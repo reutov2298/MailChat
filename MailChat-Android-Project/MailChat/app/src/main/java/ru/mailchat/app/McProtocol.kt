@@ -15,7 +15,9 @@ object McProtocol {
         val timestamp: Long,
         val sequence: Long = 0L,
         val messageVersion: Long = 1L,
-        val messageType: String = "text"
+        val messageType: String = "text",
+        val senderName: String = "",
+        val senderAvatarUrl: String = ""
     )
 
     data class Verification(
@@ -30,7 +32,9 @@ object McProtocol {
         val messageType: String, val timestamp: String, val sequence: String,
         val keyId: String, val publicKey: String, val text: String,
         val messageVersion: String = "1", val extended: Boolean = false,
-        val protocol: String = "1"
+        val protocol: String = "1",
+        val senderName: String = "",
+        val senderAvatarUrl: String = ""
     )
 
     fun normalizeText(value: String): String =
@@ -40,7 +44,7 @@ object McProtocol {
         input.protocol, input.messageId, input.chatId, input.senderId, input.sender,
         input.recipient, input.version, input.messageType, input.timestamp,
         input.sequence, input.keyId, input.publicKey, normalizeText(input.text)
-    ).let { fields -> (if (input.extended) fields + input.messageVersion else fields).joinToString("\n") }
+    ).let { fields -> (if (input.extended) fields + input.messageVersion else fields).let { base -> if (input.protocol == "3") base + input.senderName + input.senderAvatarUrl else base }.joinToString("\n") }
 
     private fun sha256(bytes: ByteArray): String =
         java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -52,7 +56,7 @@ object McProtocol {
             "senderId" to input.senderId, "sender" to input.sender, "recipient" to input.recipient,
             "version" to input.version, "messageType" to input.messageType, "timestamp" to input.timestamp,
             "sequence" to input.sequence, "keyId" to input.keyId, "publicKey" to input.publicKey,
-            "text" to normalizeText(input.text)
+            "text" to normalizeText(input.text), "senderName" to input.senderName, "senderAvatarUrl" to input.senderAvatarUrl
         )
         val bytes = canonical(input).toByteArray(Charsets.UTF_8)
         val signatureBytes = runCatching { Base64.getDecoder().decode(signature) }.getOrNull()
@@ -153,7 +157,7 @@ object McProtocol {
             }
 
             val protocol = values.getValue("x-mc-protocol")
-            if (protocol !in setOf("1", "2")) {
+            if (protocol !in setOf("1", "2", "3")) {
                 return Verification(null, "Неподдерживаемая версия протокола")
             }
 
@@ -203,7 +207,7 @@ object McProtocol {
                 return Verification(null, "Неизвестный тип события MC")
             }
             if (protocol == "1" && messageType != "text") return Verification(null, "Событие требует протокол MC 2")
-            if (protocol == "2" && (messageType == "text" || !values.containsKey("x-mc-message-version"))) {
+            if (protocol in setOf("2", "3") && ((protocol == "2" && messageType == "text") || !values.containsKey("x-mc-message-version"))) {
                 return Verification(null, "Некорректное событие протокола MC 2")
             }
             val allowedAgeSeconds = if (messageType == "text") 60L * 60L * 24L * 30L else 60L * 60L * 24L * 3650L
@@ -211,12 +215,25 @@ object McProtocol {
                 return Verification(null, "Время сообщения выходит за допустимый диапазон")
             }
 
+            fun decodeProfileHeader(key: String, maxBytes: Int): String {
+                val encoded = values[key].orEmpty()
+                if (encoded.isBlank()) return ""
+                if (encoded.length > maxBytes * 2) throw IllegalArgumentException("Профильное поле слишком длинное")
+                val decoded = String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+                if (decoded.toByteArray(Charsets.UTF_8).size > maxBytes) throw IllegalArgumentException("Профильное поле слишком длинное")
+                return decoded
+            }
+            val senderName = if (protocol == "3") decodeProfileHeader("x-mc-sender-name", 200) else ""
+            val senderAvatar = if (protocol == "3") decodeProfileHeader("x-mc-sender-avatar", 700).also {
+                if (it.isNotBlank() && !it.startsWith("https://")) throw IllegalArgumentException("Недопустимый URL аватара")
+            } else ""
             val input = CanonicalInput(
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
                 values.getValue("x-mc-version"), messageType,
                 timestamp.toString(), values.getValue("x-mc-sequence"),
                 values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
-                values["x-mc-message-version"] ?: "1", protocol == "2", protocol
+                values["x-mc-message-version"] ?: "1", protocol in setOf("2", "3"), protocol,
+                senderName, senderAvatar
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
             val signature = values.getValue("x-mc-signature")
@@ -231,7 +248,7 @@ object McProtocol {
             if (messageVersion <= 0L) return Verification(null, "Некорректная версия сообщения")
             if (messageType == "text" && messageVersion != 1L) return Verification(null, "Некорректная версия нового сообщения")
             if (messageType != "text" && messageVersion < 2L) return Verification(null, "Некорректная версия изменения сообщения")
-            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType), null, diagnostics)
+            return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType, senderName, senderAvatar), null, diagnostics)
         } catch (e: Exception) {
             return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
         }
