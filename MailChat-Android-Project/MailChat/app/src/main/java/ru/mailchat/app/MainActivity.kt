@@ -92,31 +92,42 @@ private fun HeaderAvatar(
     size: androidx.compose.ui.unit.Dp = 40.dp,
     endPadding: androidx.compose.ui.unit.Dp = 12.dp
 ) {
-    val painter = rememberAsyncImagePainter(
-        model = photoUrl,
-        onState = { state ->
-            if (state is AsyncImagePainter.State.Error && !photoUrl.isNullOrBlank()) {
-                val host = runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
-                android.util.Log.w("MCAvatar", "Image load failed: host=$host, error=${state.result.throwable.javaClass.simpleName}")
-            }
-        }
-    )
+    val avatarHost = remember(photoUrl) {
+        if (photoUrl.isNullOrBlank()) "none"
+        else runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
+    }
     Box(
         Modifier.padding(end = endPadding).size(size).clip(CircleShape).background(Blue),
         contentAlignment = Alignment.Center
     ) {
+        // Initials remain visible as the background while Coil loads, and if loading fails.
         Text(
             profileInitials(displayName),
             color = Color.White,
             fontSize = if (size >= 48.dp) 20.sp else 15.sp,
             fontWeight = FontWeight.SemiBold
         )
-        if (!photoUrl.isNullOrBlank() && painter.state is AsyncImagePainter.State.Success) {
-            Image(
-                painter = painter,
+        if (!photoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = photoUrl,
                 contentDescription = "Аватар профиля",
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                contentScale = ContentScale.Crop,
+                onLoading = {
+                    android.util.Log.i("MCAvatar", "Image load started: host=$avatarHost")
+                },
+                onSuccess = { state ->
+                    android.util.Log.i(
+                        "MCAvatar",
+                        "Image load succeeded: host=$avatarHost, size=${state.result.drawable.intrinsicWidth}x${state.result.drawable.intrinsicHeight}"
+                    )
+                },
+                onError = { state ->
+                    android.util.Log.w(
+                        "MCAvatar",
+                        "Image load failed: host=$avatarHost, error=${state.result.throwable.javaClass.simpleName}"
+                    )
+                }
             )
         }
     }
