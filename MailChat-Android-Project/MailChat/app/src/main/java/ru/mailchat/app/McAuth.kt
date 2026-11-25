@@ -20,13 +20,14 @@ class McAuth(private val context: Context) {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
     }
-    fun start(activity: MainActivity) {
+    fun start(activity: MainActivity, includePermanentDeleteScope: Boolean = false) {
         require(GmailConfig.CLIENT_ID.isNotBlank() && !GmailConfig.CLIENT_ID.startsWith("REPLACE")) {
             "Не настроен Google OAuth Client ID. Добавьте GOOGLE_OAUTH_CLIENT_ID в GitHub Actions Variables."
         }
         val request = AuthorizationRequest.Builder(config, GmailConfig.CLIENT_ID,
             ResponseTypeValues.CODE, Uri.parse(GmailConfig.REDIRECT_URI))
-            .setScope(GmailConfig.SCOPE)
+            .setScope(if (includePermanentDeleteScope) GmailConfig.SCOPE + " " + GmailConfig.DELETE_SCOPE else GmailConfig.SCOPE)
+            .setAdditionalParameters(mapOf("include_granted_scopes" to "true"))
             .let { builder ->
                 val verifier = CodeVerifierUtil.generateRandomCodeVerifier()
                 builder.setCodeVerifier(verifier, CodeVerifierUtil.deriveCodeVerifierChallenge(verifier), CodeVerifierUtil.getCodeVerifierChallengeMethod())
@@ -69,6 +70,12 @@ class McAuth(private val context: Context) {
             }
         } catch (e: Exception) { callback(null, e.message ?: "Ошибка сохранённой авторизации") }
     }
+    fun hasPermanentDeleteScope(): Boolean = runCatching {
+        val json = prefs.getString("auth_state", null) ?: return@runCatching false
+        val state = AuthState.jsonDeserialize(json)
+        state.lastTokenResponse?.scope.orEmpty().split(" ").contains(GmailConfig.DELETE_SCOPE)
+    }.getOrDefault(false)
+
     fun isConnected(): Boolean = prefs.getString("auth_state", null) != null
     fun disconnect() { prefs.edit().clear().apply() }
     fun close() { service.dispose() }
