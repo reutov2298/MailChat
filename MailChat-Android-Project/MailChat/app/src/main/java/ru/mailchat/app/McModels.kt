@@ -16,7 +16,9 @@ data class McMessage(
     val recoveredFromSpam: Boolean = false,
     val sequence: Long = 0L,
     val version: Long = 1L,
-    val deleted: Boolean = false
+    val deleted: Boolean = false,
+    // Stable chronological position; timestamp may change when an existing message is edited.
+    val orderTimestamp: Long = timestamp
 )
 
 data class McChat(
