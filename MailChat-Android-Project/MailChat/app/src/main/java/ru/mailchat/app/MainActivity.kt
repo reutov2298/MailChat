@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -667,16 +668,22 @@ class MainActivity : ComponentActivity() {
                         ) {
                             items(logLines) { line ->
                                 val color = when {
-                                    line.contains("[SERVER]") -> Color(0xFF55D68B)
-                                    line.contains("[ERROR]") || line.contains("[WARN]") -> Color(0xFFFF6262)
-                                    else -> Color.White
+                                    line.contains("[SERVER]") -> if (lightTheme) Color(0xFF187447) else Color(0xFF55D68B)
+                                    line.contains("[ERROR]") -> if (lightTheme) Color(0xFFB42332) else Color(0xFFFF6262)
+                                    line.contains("[WARN]") -> if (lightTheme) Color(0xFF9A5B12) else Color(0xFFFFB454)
+                                    else -> if (lightTheme) Color(0xFF253243) else Color.White
                                 }
                                 Text(line, color = color, fontSize = 12.sp, lineHeight = 17.sp,
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 1.dp))
                             }
                         }
                     }
-                    settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    settings -> Column(
+                        Modifier.padding(padding).fillMaxSize()
+                            .background(if (lightTheme) Color(0xFFEBEFF4) else MaterialTheme.colorScheme.background)
+                            .verticalScroll(rememberScrollState()).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
                         Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp), tonalElevation = 1.dp) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -1094,7 +1101,9 @@ class MainActivity : ComponentActivity() {
         }
         Column(modifier.fillMaxSize().imePadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Box(
-                Modifier.weight(1f).fillMaxWidth().pointerInput(listState, onRefresh) {
+                Modifier.weight(1f).fillMaxWidth()
+                    .background(if (isLightTheme) Color(0xFFE9EDF2) else MaterialTheme.colorScheme.background)
+                    .pointerInput(listState, onRefresh) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                         val startedAtNewestEnd = !listState.canScrollForward
@@ -1113,6 +1122,25 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             ) {
+            if (isLightTheme) {
+                Canvas(Modifier.matchParentSize()) {
+                    val spacing = 26.dp.toPx()
+                    val radius = 1.15.dp.toPx()
+                    var y = spacing / 2f
+                    while (y < size.height) {
+                        var x = spacing / 2f
+                        while (x < size.width) {
+                            drawCircle(
+                                color = Color(0xFF8290A0).copy(alpha = 0.16f),
+                                radius = radius,
+                                center = Offset(x, y)
+                            )
+                            x += spacing
+                        }
+                        y += spacing
+                    }
+                }
+            }
             CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(orderedMessages, key = { it.id }) { message ->
