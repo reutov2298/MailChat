@@ -8,6 +8,7 @@
 - [Архитектурные принципы](architecture/principles.md)
 - [План развития](roadmap.md)
 - [Требования к поиску и оценке транспортов UT](transports/discovery-requirements.md)
+- [Концепция автономной mesh-сети UT](transports/mesh-network.md)
 - [Кандидат: комментарии YouTube](transports/youtube-comments.md)
 - [Кандидат: почта Mail.ru](transports/mailru-mail.md)
 - [Кандидат: Яндекс Почта](transports/yandex-mail.md)
