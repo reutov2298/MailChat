@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -43,11 +44,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -949,16 +957,25 @@ class MainActivity : ComponentActivity() {
         onSend: (String, McMessage?) -> Unit,
         onDeleteMessage: (McMessage) -> Unit
     ) {
-        var draft by remember(chat.email) { mutableStateOf("") }
+        var draft by remember(chat.email) { mutableStateOf(TextFieldValue("")) }
         var editingMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         var actionMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         val listState = rememberLazyListState()
+        val clipboardManager = LocalClipboardManager.current
+        val keyboardController = LocalSoftwareKeyboardController.current
+        val messageInputFocusRequester = remember { FocusRequester() }
+        LaunchedEffect(editingMessage) {
+            if (editingMessage != null) {
+                messageInputFocusRequester.requestFocus()
+                keyboardController?.show()
+            }
+        }
         val density = LocalDensity.current
         val imeInsets = WindowInsets.ime
         val baseViewConfiguration = LocalViewConfiguration.current
         val longPressViewConfiguration = remember(baseViewConfiguration) {
             object : ViewConfiguration by baseViewConfiguration {
-                override val longPressTimeoutMillis: Long = 800L
+                override val longPressTimeoutMillis: Long = 600L
             }
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
@@ -1110,7 +1127,7 @@ class MainActivity : ComponentActivity() {
             if (editingMessage != null) {
                 Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Редактирование сообщения", modifier = Modifier.weight(1f), color = Blue, fontSize = 12.sp)
-                    TextButton(onClick = { editingMessage = null; draft = "" }) { Text("Отмена") }
+                    TextButton(onClick = { editingMessage = null; draft = TextFieldValue("") }) { Text("Отмена") }
                 }
             }
             Surface(
@@ -1122,7 +1139,7 @@ class MainActivity : ComponentActivity() {
                     OutlinedTextField(
                         value = draft,
                         onValueChange = { draft = it },
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).focusRequester(messageInputFocusRequester),
                         placeholder = { Text("Сообщение...") },
                         shape = RoundedCornerShape(22.dp),
                         maxLines = 4,
@@ -1134,38 +1151,54 @@ class MainActivity : ComponentActivity() {
                         )
                     )
                     IconButton(onClick = {
-                        if (draft.isNotBlank()) {
+                        if (draft.text.isNotBlank()) {
                             scrollAfterSend = true
-                            onSend(draft.trim(), editingMessage)
-                            draft = ""
+                            onSend(draft.text.trim(), editingMessage)
+                            draft = TextFieldValue("")
                             editingMessage = null
                         }
-                    }, enabled = draft.isNotBlank()) {
-                        Icon(Icons.Default.Send, "Отправить", tint = if (draft.isNotBlank()) Blue else Color.Gray)
+                    }, enabled = draft.text.isNotBlank()) {
+                        Icon(Icons.Default.Send, "Отправить", tint = if (draft.text.isNotBlank()) Blue else Color.Gray)
                     }
                 }
             }
         }
         actionMessage?.let { selectedMessage ->
-            AlertDialog(
-                onDismissRequest = { actionMessage = null },
-                title = { Text("Сообщение") },
-                text = { Text("Что сделать с этим сообщением?") },
-                confirmButton = {
-                    Row {
-                        TextButton(onClick = {
-                            editingMessage = selectedMessage
-                            draft = selectedMessage.text
-                            actionMessage = null
-                        }) { Text("Редактировать") }
-                        TextButton(onClick = {
-                            onDeleteMessage(selectedMessage)
-                            actionMessage = null
-                        }) { Text("Удалить", color = MaterialTheme.colorScheme.error) }
+            androidx.compose.ui.window.Dialog(onDismissRequest = { actionMessage = null }) {
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 6.dp
+                ) {
+                    Column(Modifier.widthIn(min = 240.dp).padding(vertical = 6.dp)) {
+                        DropdownMenuItem(
+                            text = { Text("Копировать") },
+                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(selectedMessage.text))
+                                actionMessage = null
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Редактировать") },
+                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                            onClick = {
+                                draft = TextFieldValue(selectedMessage.text, selection = TextRange(selectedMessage.text.length))
+                                editingMessage = selectedMessage
+                                actionMessage = null
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Удалить") },
+                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                            onClick = {
+                                onDeleteMessage(selectedMessage)
+                                actionMessage = null
+                            }
+                        )
                     }
-                },
-                dismissButton = { TextButton(onClick = { actionMessage = null }) { Text("Отмена") } }
-            )
+                }
+            }
         }
     }
 
