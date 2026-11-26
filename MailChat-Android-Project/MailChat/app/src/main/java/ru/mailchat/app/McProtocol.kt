@@ -203,7 +203,13 @@ object McProtocol {
                     else -> textAfterBlock
                 }
             }
-            val text = normalizeText(rawText)
+            // Protocol v3 senders include the exact UTF-8 text bytes as URL-safe Base64.
+            // Prefer this signed representation over the MIME display body, which Gmail
+            // is allowed to normalize (line endings, transfer encoding, etc.).
+            val text = values["x-mc-text-base64"]?.takeIf { it.isNotBlank() }?.let { encoded ->
+                require(encoded.length <= 2_800_000) { "Подписанный текст слишком длинный" }
+                normalizeText(String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8))
+            } ?: normalizeText(rawText)
 
             val messageId = values.getValue("x-mc-message-id")
             val chatId = values.getValue("x-mc-chat-id")
