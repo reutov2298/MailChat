@@ -663,8 +663,14 @@ class MainActivity : ComponentActivity() {
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
-                        Text(if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Не подключён")
-                        if (token == null) {
+                        Text(
+                            when {
+                                token != null -> accountEmail.ifBlank { repo.myEmail() }
+                                auth.isConnected() -> "Аккаунт сохранён — восстанавливаем подключение"
+                                else -> "Не подключён"
+                            }
+                        )
+                        if (token == null && !auth.isConnected()) {
                             Button(onClick = {
                                 try {
                                     auth.start(this@MainActivity)
@@ -675,7 +681,10 @@ class MainActivity : ComponentActivity() {
                                 }
                             }) { Text("Продолжить с Google") }
                         }
-                        if (token != null) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
+                        if (token == null && auth.isConnected()) {
+                            OutlinedButton(onClick = { refreshToken() }) { Text("Повторить подключение") }
+                        }
+                        if (token != null || auth.isConnected()) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
