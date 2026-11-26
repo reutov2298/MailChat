@@ -7,6 +7,8 @@
 - [Границы ответственности](architecture/boundaries.md)
 - [Архитектурные принципы](architecture/principles.md)
 - [План развития](roadmap.md)
+- [Требования к поиску и оценке транспортов UT](transports/discovery-requirements.md)
+- [Кандидат: комментарии YouTube](transports/youtube-comments.md)
 - [Предложение по адаптеру Telegraph](transports/telegraph.md)
 
 ## Статус документации
