@@ -894,14 +894,14 @@ class MainActivity : ComponentActivity() {
                                                     chat.title,
                                                     fontWeight = FontWeight.SemiBold,
                                                     fontSize = 15.sp,
-                                                    color = Color(0xFFF1F5F9),
+                                                    color = if (lightTheme) Color(0xFF202A36) else Color(0xFFF1F5F9),
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                                 Text(
                                                     chat.messages.lastOrNull()?.text ?: "",
                                                     modifier = Modifier.fillMaxWidth(),
-                                                    color = Color(0xFF9EADBC).copy(alpha = 0.85f),
+                                                    color = if (lightTheme) Color(0xFF697586) else Color(0xFF9EADBC).copy(alpha = 0.85f),
                                                     maxLines = 2,
                                                     overflow = TextOverflow.Ellipsis,
                                                     fontSize = 12.sp,
@@ -914,7 +914,7 @@ class MainActivity : ComponentActivity() {
                                             ) {
                                                 Text(
                                                     chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "",
-                                                    color = Color(0xFF8FA1B3),
+                                                    color = if (lightTheme) Color(0xFF8793A2) else Color(0xFF8FA1B3),
                                                     fontSize = 11.sp,
                                                     maxLines = 1
                                                 )
@@ -926,7 +926,7 @@ class MainActivity : ComponentActivity() {
                                 if (syncInProgress) {
                                     Surface(
                                         modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
-                                        color = Navy.copy(alpha = 0.85f),
+                                        color = if (lightTheme) Color(0xFF42566F).copy(alpha = 0.92f) else Navy.copy(alpha = 0.85f),
                                         shape = RoundedCornerShape(20.dp),
                                         shadowElevation = 4.dp
                                     ) {
@@ -1197,7 +1197,7 @@ class MainActivity : ComponentActivity() {
             if (isSyncing) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
-                    color = Navy.copy(alpha = 0.85f),
+                    color = if (lightTheme) Color(0xFF42566F).copy(alpha = 0.92f) else Navy.copy(alpha = 0.85f),
                     shape = RoundedCornerShape(20.dp),
                     shadowElevation = 4.dp
                 ) {
