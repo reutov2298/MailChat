@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Velocity
@@ -490,7 +491,7 @@ class MainActivity : ComponentActivity() {
             Scaffold(
                 floatingActionButton = {
                     if (!settings && !logs && selected == null) {
-                        FloatingActionButton(onClick = { showNew = true }) {
+                        FloatingActionButton(onClick = { showNew = true }, shape = CircleShape) {
                             Icon(Icons.Default.Add, contentDescription = "Новый чат")
                         }
                     }
@@ -739,18 +740,18 @@ class MainActivity : ComponentActivity() {
                                         return Offset.Zero
                                     }
                                     override suspend fun onPreFling(available: Velocity): Velocity {
-                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollBackward) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
+                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollBackward && !syncInProgress && token != null) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
                                         else bottomPullDistance = 0f
                                         return Velocity.Zero
                                     }
                                 }
                             }
-                            Box(Modifier.fillMaxSize()) {
-                                LazyColumn(state = chatListState, modifier = Modifier.fillMaxSize().nestedScroll(bottomRefreshConnection), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 8.dp)) {
+                            Box(Modifier.fillMaxSize().nestedScroll(bottomRefreshConnection)) {
+                                LazyColumn(state = chatListState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
                                 items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
                                     val dragOffset = remember(chat.email) { mutableFloatStateOf(0f) }
                                     Card(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
                                             .graphicsLayer {
                                                 translationX = dragOffset.floatValue
                                                 val threshold = size.width * 0.30f
@@ -777,17 +778,17 @@ class MainActivity : ComponentActivity() {
                                         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
-                                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                                             HeaderAvatar(
                                                 chat.avatarUrl,
                                                 chat.senderName?.takeIf { it.isNotBlank() } ?: chat.title,
-                                                size = 50.dp,
+                                                size = 44.dp,
                                                 endPadding = 0.dp
                                             )
                                             Spacer(Modifier.width(13.dp))
-                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                                                 Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
-                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC).copy(alpha = 0.85f), maxLines = 1, fontSize = 13.sp)
+                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC).copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
                                             }
                                             Column(horizontalAlignment = Alignment.End) {
                                                 Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
