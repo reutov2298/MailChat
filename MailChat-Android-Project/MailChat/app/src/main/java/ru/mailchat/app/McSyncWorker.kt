@@ -90,6 +90,7 @@ class McSyncWorker(
                         val updatedMessages = chats[index].messages.toMutableList()
                         updatedMessages[existingIndex] = existing.copy(
                             text = if (parsed.messageType == "delete") "" else parsed.text,
+                            timestamp = if (parsed.messageType == "edit") System.currentTimeMillis() / 1000L else existing.timestamp,
                             version = parsed.messageVersion,
                             sequence = parsed.sequence,
                             deleted = parsed.messageType == "delete"
