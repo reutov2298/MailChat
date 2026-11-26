@@ -992,7 +992,7 @@ class MainActivity : ComponentActivity() {
         }
         var scrollAfterSend by remember(chat.email) { mutableStateOf(false) }
         val orderedMessages = remember(chat.messages) {
-            chat.messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id })
+            chat.messages.sortedWith(compareBy<McMessage> { it.orderTimestamp }.thenBy { it.sequence }.thenBy { it.id })
         }
         var knownIncomingMessageIds by remember(chat.email) {
             mutableStateOf(chat.messages.filter { it.incoming }.map { it.id }.toSet())
