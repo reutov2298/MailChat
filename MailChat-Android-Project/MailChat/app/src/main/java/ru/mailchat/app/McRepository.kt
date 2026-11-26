@@ -52,6 +52,8 @@ class McRepository(context: Context) {
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 30)
     fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 60)
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
+    fun lightThemeEnabled(): Boolean = prefs.getBoolean("light_theme_enabled", false)
+    fun setLightThemeEnabled(enabled: Boolean) { prefs.edit().putBoolean("light_theme_enabled", enabled).apply() }
 
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
