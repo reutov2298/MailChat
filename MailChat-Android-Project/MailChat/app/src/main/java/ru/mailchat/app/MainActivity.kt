@@ -488,6 +488,13 @@ class MainActivity : ComponentActivity() {
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(
+                floatingActionButton = {
+                    if (!settings && !logs && selected == null) {
+                        FloatingActionButton(onClick = { showNew = true }) {
+                            Icon(Icons.Default.Add, contentDescription = "Новый чат")
+                        }
+                    }
+                },
                 bottomBar = {
                     val deletions = pendingDeleteDeadlines.entries.sortedBy { it.value }
                     if (deletions.isNotEmpty()) Surface(
@@ -546,7 +553,6 @@ class MainActivity : ComponentActivity() {
                     }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
                     if (!settings && !logs && selected == null) {
-                        IconButton(onClick = { showNew = true }) { Icon(Icons.Default.Add, "Новый чат") }
                         IconButton(onClick = { settings = true }) { Icon(Icons.Default.Settings, "Настройки") }
                     } else if (!settings && !logs && selectedChat != null) {
                         IconButton(onClick = {
@@ -816,12 +822,30 @@ class MainActivity : ComponentActivity() {
             if (showNew) {
                 var email by remember { mutableStateOf("") }
                 var displayName by remember { mutableStateOf("") }
-                AlertDialog(onDismissRequest = { showNew = false }, title = { Text("Новый пользователь") }, text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(value = displayName, onValueChange = { displayName = it }, label = { Text("Имя") }, singleLine = true)
-                        OutlinedTextField(value = email, onValueChange = { email = it }, label = { Text("Gmail собеседника") }, singleLine = true)
-                    }
-                }, confirmButton = { TextButton(onClick = {
+                AlertDialog(
+                    onDismissRequest = { showNew = false },
+                    shape = RoundedCornerShape(28.dp),
+                    tonalElevation = 6.dp,
+                    title = { Text("Новый чат") },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedTextField(
+                                value = displayName,
+                                onValueChange = { displayName = it },
+                                label = { Text("Имя") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = email,
+                                onValueChange = { email = it },
+                                label = { Text("Gmail собеседника") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    },
+                    confirmButton = { TextButton(onClick = {
                     if (email.contains("@")) {
                         val normalized = email.trim().lowercase()
                         val manualName = displayName.trim()
@@ -840,7 +864,9 @@ class MainActivity : ComponentActivity() {
                         repo.setLastChat(normalized)
                         showNew = false
                     }
-                }) { Text("Создать") } }, dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } })
+                }) { Text("Добавить") } },
+                    dismissButton = { TextButton(onClick = { showNew = false }) { Text("Отмена") } }
+                )
             }
         }
         if (editContactProfile && selectedChat != null) {
