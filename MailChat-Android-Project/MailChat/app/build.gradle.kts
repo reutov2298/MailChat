@@ -13,8 +13,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // Material Design 3 new-chat interface.
-        versionCode = 36
-        versionName = "1.1.3"
+        versionCode = 37
+        versionName = "1.1.4"
         val oauthClientId = providers.gradleProperty("googleOAuthClientId").orElse(providers.environmentVariable("GOOGLE_OAUTH_CLIENT_ID")).getOrElse("REPLACE_WITH_GOOGLE_OAUTH_CLIENT_ID")
         buildConfigField("String", "GOOGLE_OAUTH_CLIENT_ID", "\"$oauthClientId\"")
     }
