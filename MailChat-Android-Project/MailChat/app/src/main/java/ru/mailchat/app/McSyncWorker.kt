@@ -32,7 +32,7 @@ class McSyncWorker(
         return try {
             if (!repo.acquireSyncLock()) return Result.success()
             lockAcquired = true
-            val token = suspendCancellableCoroutine<String?> { continuation ->
+            var token = suspendCancellableCoroutine<String?> { continuation ->
                 auth.accessToken { access, _ ->
                     if (continuation.isActive) continuation.resume(access)
                 }
@@ -46,8 +46,18 @@ class McSyncWorker(
                 onDiagnostic = { logger.debug(it) }
             }
             val since = repo.baseline().coerceAtLeast(1L)
-            val incoming = withContext(Dispatchers.IO) {
-                gmail.list(token, "after:$since {in:inbox in:spam}", 50)
+            val incoming = try {
+                withContext(Dispatchers.IO) { gmail.list(token, "after:$since {in:inbox in:spam}", 50) }
+            } catch (e: GmailTransport.GmailApiException) {
+                if (e.statusCode != 401) throw e
+                logger.error("Фоновая синхронизация получила HTTP 401; принудительно обновляем токен")
+                token = suspendCancellableCoroutine { continuation ->
+                    auth.accessToken(forceRefresh = true) { access, _ ->
+                        if (continuation.isActive) continuation.resume(access)
+                    }
+                } ?: return Result.retry()
+                logger.info("Фоновый токен Google обновлён; повторяем запрос один раз")
+                withContext(Dispatchers.IO) { gmail.list(token, "after:$since {in:inbox in:spam}", 50) }
             }
             var accepted = 0
             var chats = repo.chats().toMutableList()
