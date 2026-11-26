@@ -44,6 +44,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.round
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -377,7 +385,9 @@ class MainActivity : ComponentActivity() {
                         if (parsed.messageVersion > existing.version) {
                             val updatedMessages = current[index].messages.toMutableList()
                             updatedMessages[existingIndex] = existing.copy(
-                                text = message.text, version = parsed.messageVersion,
+                                text = message.text,
+                                timestamp = if (parsed.messageType == "edit") System.currentTimeMillis() / 1000L else existing.timestamp,
+                                version = parsed.messageVersion,
                                 sequence = parsed.sequence, deleted = message.deleted
                             )
                             current[index] = current[index].copy(messages = repo.orderedMessages(updatedMessages))
@@ -671,7 +681,8 @@ class MainActivity : ComponentActivity() {
                                         sequence = repo.nextSequence(email.lowercase(), accountEmail)
                                     )
                                 } else editing.copy(
-                                    text = body, version = editing.version + 1L, deleted = false,
+                                    text = body, timestamp = System.currentTimeMillis() / 1000L,
+                                    version = editing.version + 1L, deleted = false,
                                     sequence = repo.sequenceForMutation(email.lowercase(), accountEmail, editing.id, editing.sequence),
                                     state = DeliveryState.QUEUED
                                 )
@@ -960,6 +971,7 @@ class MainActivity : ComponentActivity() {
         var draft by remember(chat.email) { mutableStateOf(TextFieldValue("")) }
         var editingMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
         var actionMessage by remember(chat.email) { mutableStateOf<McMessage?>(null) }
+        var actionMenuPosition by remember(chat.email) { mutableStateOf(IntOffset.Zero) }
         val listState = rememberLazyListState()
         val clipboardManager = LocalClipboardManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
@@ -1037,15 +1049,20 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalViewConfiguration provides longPressViewConfiguration) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(orderedMessages, key = { it.id }) { message ->
+                    var messageCoordinates by remember(message.id) { mutableStateOf<LayoutCoordinates?>(null) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             modifier = Modifier
                                 .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
+                                .onGloballyPositioned { messageCoordinates = it }
                                 .pointerInput(message.id, message.deleted, message.incoming) {
-                                    detectTapGestures(onLongPress = {
-                                        if (!message.incoming && !message.deleted &&
-                                            message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED)
-                                        ) actionMessage = message
+                                    detectTapGestures(onLongPress = { localPoint ->
+                                        val canOpen = !message.deleted && (message.incoming ||
+                                            message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED))
+                                        if (canOpen) {
+                                            actionMenuPosition = messageCoordinates?.localToWindow(localPoint)?.round() ?: IntOffset.Zero
+                                            actionMessage = message
+                                        }
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
@@ -1074,11 +1091,14 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         val messageDate = Date(message.timestamp * 1000L)
                                         val dateTimeColor = Color.LightGray.copy(alpha = 0.8f)
+                                        if (message.version > 1L) {
+                                            Text("изменено   ", fontSize = 10.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                                        }
                                         Text(
                                             SimpleDateFormat("dd.MM.yy", Locale.getDefault()).format(messageDate),
                                             fontSize = 10.sp, color = dateTimeColor
                                         )
-                                        Spacer(Modifier.width(4.dp))
+                                        Spacer(Modifier.width(8.dp))
                                         Text(
                                             SimpleDateFormat("HH:mm", Locale.getDefault()).format(messageDate),
                                             fontSize = 10.sp, color = dateTimeColor
@@ -1164,38 +1184,61 @@ class MainActivity : ComponentActivity() {
             }
         }
         actionMessage?.let { selectedMessage ->
-            androidx.compose.ui.window.Dialog(onDismissRequest = { actionMessage = null }) {
+            Popup(
+                popupPositionProvider = object : PopupPositionProvider {
+                    override fun calculatePosition(
+                        anchorBounds: androidx.compose.ui.unit.IntRect,
+                        windowSize: IntSize,
+                        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+                        popupContentSize: IntSize
+                    ): IntOffset {
+                        val margin = with(density) { 8.dp.roundToPx() }
+                        val x = (actionMenuPosition.x - popupContentSize.width)
+                            .coerceIn(margin, (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin))
+                        val y = actionMenuPosition.y
+                            .coerceIn(margin, (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin))
+                        return IntOffset(x, y)
+                    }
+                },
+                onDismissRequest = { actionMessage = null }
+            ) {
                 Surface(
                     shape = RoundedCornerShape(18.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 6.dp
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                    tonalElevation = 6.dp,
+                    shadowElevation = 8.dp
                 ) {
-                    Column(Modifier.widthIn(min = 240.dp).padding(vertical = 6.dp)) {
+                    Column(Modifier.widthIn(max = 220.dp).padding(horizontal = 8.dp, vertical = 6.dp)) {
                         DropdownMenuItem(
                             text = { Text("Копировать") },
                             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                             onClick = {
                                 clipboardManager.setText(AnnotatedString(selectedMessage.text))
                                 actionMessage = null
-                            }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                         )
-                        DropdownMenuItem(
-                            text = { Text("Редактировать") },
-                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                            onClick = {
-                                draft = TextFieldValue(selectedMessage.text, selection = TextRange(selectedMessage.text.length))
-                                editingMessage = selectedMessage
-                                actionMessage = null
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Удалить") },
-                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                            onClick = {
-                                onDeleteMessage(selectedMessage)
-                                actionMessage = null
-                            }
-                        )
+                        if (!selectedMessage.incoming) {
+                            DropdownMenuItem(
+                                text = { Text("Редактировать") },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                onClick = {
+                                    draft = TextFieldValue(selectedMessage.text, selection = TextRange(selectedMessage.text.length))
+                                    editingMessage = selectedMessage
+                                    actionMessage = null
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Удалить") },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                                onClick = {
+                                    onDeleteMessage(selectedMessage)
+                                    actionMessage = null
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            )
+                        }
                     }
                 }
             }
