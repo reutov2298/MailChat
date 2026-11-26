@@ -1047,29 +1047,36 @@ class MainActivity : ComponentActivity() {
                                     fontSize = 12.sp
                                 )
                             } else {
-                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 6.dp)) {
                                     if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                    Text(message.text)
+                                    Text(message.text, lineHeight = 18.sp)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        val messageDate = Date(message.timestamp * 1000L)
+                                        val dateTimeColor = Color.LightGray.copy(alpha = 0.8f)
                                         Text(
-                                            SimpleDateFormat("dd.MM.yy HH:mm", Locale.getDefault()).format(Date(message.timestamp * 1000L)),
-                                            fontSize = 10.sp, color = Color.LightGray
+                                            SimpleDateFormat("dd.MM.yy", Locale.getDefault()).format(messageDate),
+                                            fontSize = 10.sp, color = dateTimeColor
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            SimpleDateFormat("HH:mm", Locale.getDefault()).format(messageDate),
+                                            fontSize = 10.sp, color = dateTimeColor
                                         )
                                         if (!message.incoming) {
                                             Spacer(Modifier.width(4.dp))
                                             val statusColor = if (message.state == DeliveryState.FAILED) Color(0xFFFF6262) else Color(0xFF55D68B)
                                             when (message.state) {
-                                                DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                                DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                                DeliveryState.DELIVERED -> Box(Modifier.width(10.dp).height(9.dp)) {
-                                                    Text("✓", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
-                                                    Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.QUEUED -> Text("◷", color = statusColor, fontSize = 10.sp, lineHeight = 10.sp)
+                                                DeliveryState.SENT_TO_GMAIL -> Text("✓", color = statusColor, fontSize = 10.sp, lineHeight = 10.sp)
+                                                DeliveryState.DELIVERED -> Box(Modifier.width(13.dp).height(10.dp)) {
+                                                    Text("✓", color = statusColor, fontSize = 10.sp, lineHeight = 10.sp)
+                                                    Text("✓", modifier = Modifier.offset(x = 3.dp), color = statusColor, fontSize = 10.sp, lineHeight = 10.sp)
                                                 }
-                                                DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 7.sp, lineHeight = 8.sp)
+                                                DeliveryState.FAILED -> Text("!", color = statusColor, fontSize = 10.sp, lineHeight = 10.sp)
                                             }
                                         }
                                     }
