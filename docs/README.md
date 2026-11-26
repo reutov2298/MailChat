@@ -9,6 +9,9 @@
 - [План развития](roadmap.md)
 - [Требования к поиску и оценке транспортов UT](transports/discovery-requirements.md)
 - [Кандидат: комментарии YouTube](transports/youtube-comments.md)
+- [Кандидат: почта Mail.ru](transports/mailru-mail.md)
+- [Кандидат: Яндекс Почта](transports/yandex-mail.md)
+- [Кандидат: комментарии Drom.ru](transports/drom-comments.md)
 - [Предложение по адаптеру Telegraph](transports/telegraph.md)
 
 ## Статус документации
