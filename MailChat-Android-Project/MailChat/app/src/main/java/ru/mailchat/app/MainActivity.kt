@@ -43,10 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.platform.ViewConfiguration
@@ -56,7 +52,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.Velocity
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -730,23 +725,40 @@ class MainActivity : ComponentActivity() {
                             Button(onClick = { settings = true }) { Text("Подключить Gmail") }
                         } else {
                             val chatListState = rememberLazyListState()
-                            var bottomPullDistance by remember { mutableFloatStateOf(0f) }
                             val density = LocalDensity.current
-                            val bottomRefreshConnection = remember(chatListState) {
-                                object : NestedScrollConnection {
-                                    override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                                        if (!chatListState.canScrollBackward && available.y > 0f) bottomPullDistance = (bottomPullDistance + available.y).coerceAtMost(with(density) { 120.dp.toPx() })
-                                        else if (available.y != 0f) bottomPullDistance = 0f
-                                        return Offset.Zero
-                                    }
-                                    override suspend fun onPreFling(available: Velocity): Velocity {
-                                        if (bottomPullDistance >= with(density) { 72.dp.toPx() } && !chatListState.canScrollBackward && !syncInProgress && token != null) { bottomPullDistance = 0f; syncNow(source = "жест обновления списка чатов") }
-                                        else bottomPullDistance = 0f
-                                        return Velocity.Zero
+                            Box(
+                                Modifier.fillMaxSize().pointerInput(chatListState, syncInProgress, token) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(
+                                            requireUnconsumed = false,
+                                            pass = PointerEventPass.Initial
+                                        )
+                                        val startedAtTop = chatListState.firstVisibleItemIndex == 0 &&
+                                            chatListState.firstVisibleItemScrollOffset == 0
+                                        var totalY = 0f
+                                        var totalX = 0f
+                                        var pointerDown = true
+                                        while (pointerDown) {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                                            totalX += change.position.x - change.previousPosition.x
+                                            totalY += change.position.y - change.previousPosition.y
+                                            pointerDown = change.pressed
+                                        }
+                                        val refreshThreshold = with(density) { 72.dp.toPx() }
+                                        val stillAtTop = chatListState.firstVisibleItemIndex == 0 &&
+                                            chatListState.firstVisibleItemScrollOffset == 0
+                                        if (
+                                            startedAtTop && stillAtTop &&
+                                            totalY >= refreshThreshold &&
+                                            totalY > kotlin.math.abs(totalX) * 1.25f &&
+                                            !syncInProgress && token != null
+                                        ) {
+                                            syncNow(source = "жест обновления списка чатов")
+                                        }
                                     }
                                 }
-                            }
-                            Box(Modifier.fillMaxSize().nestedScroll(bottomRefreshConnection)) {
+                            ) {
                                 LazyColumn(state = chatListState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
                                 items(chats.filterNot { pendingDeleteDeadlines.keys.any { pending -> pending.equals(it.email, true) } }.sortedByDescending { it.messages.maxOfOrNull(McMessage::timestamp) ?: 0L }, key = { it.email }) { chat ->
                                     val dragOffset = remember(chat.email) { mutableFloatStateOf(0f) }
@@ -778,20 +790,49 @@ class MainActivity : ComponentActivity() {
                                         colors = CardDefaults.cardColors(containerColor = Color.Transparent),
                                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
-                                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             HeaderAvatar(
                                                 chat.avatarUrl,
                                                 chat.senderName?.takeIf { it.isNotBlank() } ?: chat.title,
                                                 size = 44.dp,
                                                 endPadding = 0.dp
                                             )
-                                            Spacer(Modifier.width(13.dp))
-                                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                                Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
-                                                Text(chat.messages.lastOrNull()?.text ?: "", color = Color(0xFF9EADBC).copy(alpha = 0.85f), maxLines = 2, overflow = TextOverflow.Ellipsis, fontSize = 13.sp)
+                                            Spacer(Modifier.width(10.dp))
+                                            Column(
+                                                Modifier.weight(1f).fillMaxWidth().padding(end = 8.dp),
+                                                verticalArrangement = Arrangement.spacedBy(0.dp)
+                                            ) {
+                                                Text(
+                                                    chat.title,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontSize = 15.sp,
+                                                    color = Color(0xFFF1F5F9),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    chat.messages.lastOrNull()?.text ?: "",
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    color = Color(0xFF9EADBC).copy(alpha = 0.85f),
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    fontSize = 12.sp,
+                                                    lineHeight = 14.sp
+                                                )
                                             }
-                                            Column(horizontalAlignment = Alignment.End) {
-                                                Text(chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "", color = Color(0xFF8FA1B3), fontSize = 11.sp)
+                                            Column(
+                                                modifier = Modifier.widthIn(min = 40.dp),
+                                                horizontalAlignment = Alignment.End
+                                            ) {
+                                                Text(
+                                                    chat.messages.lastOrNull()?.let { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(it.timestamp * 1000L)) } ?: "",
+                                                    color = Color(0xFF8FA1B3),
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1
+                                                )
                                             }
                                         }
                                     }
