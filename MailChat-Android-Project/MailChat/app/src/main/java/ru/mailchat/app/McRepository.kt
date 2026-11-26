@@ -103,7 +103,8 @@ class McRepository(context: Context) {
                     m.optBoolean("spam"),
                     m.optLong("sequence", 0L),
                     m.optLong("version", 1L),
-                    m.optBoolean("deleted", false)
+                    m.optBoolean("deleted", false),
+                    m.optLong("orderTimestamp", m.optLong("timestamp"))
                 )
             }
             val email = j.optString("email")
@@ -134,6 +135,7 @@ class McRepository(context: Context) {
                         .put("text", m.text).put("timestamp", m.timestamp).put("incoming", m.incoming)
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                         .put("sequence", m.sequence).put("version", m.version).put("deleted", m.deleted)
+                        .put("orderTimestamp", m.orderTimestamp)
                 )
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
@@ -165,7 +167,7 @@ class McRepository(context: Context) {
     }
 
     fun orderedMessages(messages: List<McMessage>): List<McMessage> =
-        messages.sortedWith(compareBy<McMessage> { it.timestamp }.thenBy { it.sequence }.thenBy { it.id })
+        messages.sortedWith(compareBy<McMessage> { it.orderTimestamp }.thenBy { it.sequence }.thenBy { it.id })
 
     fun lastChat(): String = prefs.getString("last_chat", "").orEmpty()
 
