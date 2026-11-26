@@ -75,6 +75,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import java.security.Security
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -183,6 +186,34 @@ class MainActivity : ComponentActivity() {
         handleAuthIntent(intent)
     }
 
+    private suspend fun freshAccessToken(forceRefresh: Boolean = false): String =
+        suspendCancellableCoroutine { continuation ->
+            auth.accessToken(forceRefresh) { access, error ->
+                if (continuation.isActive) {
+                    if (access != null) {
+                        token = access
+                        continuation.resume(access)
+                    } else {
+                        continuation.resumeWithException(IllegalStateException(error ?: "Не удалось обновить токен Google"))
+                    }
+                }
+            }
+        }
+
+    // Refresh once on HTTP 401. Transient failures must not clear the persisted OAuth session.
+    private suspend fun <T> gmailRequest(block: suspend (String) -> T): T {
+        val current = freshAccessToken()
+        return try {
+            block(current)
+        } catch (e: GmailTransport.GmailApiException) {
+            if (e.statusCode != 401) throw e
+            logger.error("Gmail вернул HTTP 401; выполняется принудительное обновление токена")
+            val renewed = freshAccessToken(forceRefresh = true)
+            logger.add("Токен Google обновлён после HTTP 401; запрос повторяется один раз")
+            block(renewed)
+        }
+    }
+
     private fun handleAuthIntent(intent: Intent): Boolean {
         authResolving = true
         val handled = auth.handle(intent) { access, error ->
@@ -211,11 +242,10 @@ class MainActivity : ComponentActivity() {
                 authChanged++
                 loadProfileAndSetBaseline()
             } else {
-                token = null
-                accountEmail = ""
+                // Keep the saved OAuth session and last known account on transient refresh failures.
                 authResolving = false
                 errorText = error.orEmpty()
-                logger.error("Не удалось восстановить авторизацию: ${errorText.take(200)}")
+                logger.error("Не удалось обновить токен Google (сессия сохранена): ${errorText.take(200)}")
                 authChanged++
             }
         }
@@ -226,8 +256,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 logger.add("Запрос профиля Gmail")
-                val profile = withContext(Dispatchers.IO) { gmail.profile(t) }
-                val ownProfile = runCatching { withContext(Dispatchers.IO) { gmail.ownProfile(t) } }
+                val profile = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.profile(fresh) } }
+                val ownProfile = runCatching { gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.ownProfile(fresh) } } }
                     .onFailure { logger.error("Не удалось получить профиль Google: ${it.javaClass.simpleName}") }
                     .getOrNull()
                 if (ownProfile != null) {
@@ -246,9 +276,7 @@ class MainActivity : ComponentActivity() {
                 syncNow(source = "после авторизации")
             } catch (e: Exception) {
                 errorText = e.message ?: "Ошибка Gmail API"
-                logger.error("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}")
-                token = null
-                accountEmail = ""
+                logger.error("Ошибка подключения Gmail: ${e.javaClass.simpleName}: ${errorText.take(200)}; OAuth-сессия сохранена")
                 authResolving = false
                 authChanged++
             }
@@ -260,10 +288,11 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 logger.add("Начата отправка события $messageType получателю: $to")
-                val id = withContext(Dispatchers.IO) {
+                val id = gmailRequest { fresh ->
+                    withContext(Dispatchers.IO) {
                     val pair = identity.keyPair()
                     gmail.send(
-                        t, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
+                        fresh, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
                         message.chatId, identity.publicKey(),
                         messageId = message.id, sequence = message.sequence,
                         messageVersion = message.version, messageType = messageType,
@@ -271,6 +300,7 @@ class MainActivity : ComponentActivity() {
                         senderName = repo.ownProfileName(),
                         senderAvatarUrl = repo.ownProfileAvatar()
                     ) { bytes -> McCrypto.sign(pair, bytes) }
+                    }
                 }
                 logger.add("Событие MC отправлено в Gmail: $id; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
                 done(null)
@@ -319,8 +349,8 @@ class MainActivity : ComponentActivity() {
         var result = "Проверка завершена"
             try {
                 logger.add("Запрос списка входящих сообщений Gmail")
-                val incoming = withContext(Dispatchers.IO) {
-                    gmail.list(t, "after:$since {in:inbox in:spam}", 50)
+                val incoming = gmailRequest { fresh ->
+                    withContext(Dispatchers.IO) { gmail.list(fresh, "after:$since {in:inbox in:spam}", 50) }
                 }
                 logger.add("Gmail вернул сообщений: ${incoming.size}")
 
@@ -359,7 +389,7 @@ class MainActivity : ComponentActivity() {
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
                     if (mail.spam) {
-                        withContext(Dispatchers.IO) { gmail.moveOutOfSpam(t, mail.id) }
+                        gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.moveOutOfSpam(fresh, mail.id) } }
                         logger.info("Подтверждённое сообщение MC возвращено из спама")
                     }
 
