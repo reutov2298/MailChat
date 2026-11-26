@@ -481,6 +481,7 @@ class MainActivity : ComponentActivity() {
         var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
         var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
+        var lightTheme by remember { mutableStateOf(repo.lightThemeEnabled()) }
         val pendingDeleteDeadlines = remember { mutableStateMapOf<String, Long>().apply { putAll(repo.pendingChatDeletions()) } }
         var deleteCountdownNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val logListState = rememberLazyListState()
@@ -530,8 +531,17 @@ class MainActivity : ComponentActivity() {
             if (settings) applySyncSettings()
             if (logs) logs = false else { settings = false; selected = null; repo.setLastChat(null) }
         }
-        MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
-            Scaffold(
+        val lightColors = lightColorScheme(
+            primary = Color(0xFF438FE3), onPrimary = Color.White,
+            secondary = Color(0xFF78A9E8), onSecondary = Color(0xFF102B4C),
+            background = Color(0xFFF5F7FB), onBackground = Color(0xFF202A36),
+            surface = Color(0xFFFFFFFF), onSurface = Color(0xFF202A36),
+            surfaceVariant = Color(0xFFEDF1F6), onSurfaceVariant = Color(0xFF697586),
+            outline = Color(0xFFDCE3EC), error = Color(0xFFBA3B45)
+        )
+        val darkColors = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))
+        MaterialTheme(colorScheme = if (lightTheme) lightColors else darkColors) {
+            Scaffold(containerColor = MaterialTheme.colorScheme.background,
                 floatingActionButton = {
                     if (!settings && !logs && selected == null) {
                         FloatingActionButton(onClick = { showNew = true }, shape = CircleShape) {
@@ -604,7 +614,12 @@ class MainActivity : ComponentActivity() {
                             editContactProfile = true
                         }) { Icon(Icons.Default.Edit, "Профиль собеседника") }
                     }
-                }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Navy))
+                }, colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = if (lightTheme) Color(0xFFF9FAFD) else Navy,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                ))
             }) { padding ->
                 when {
                     authResolving -> Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -662,6 +677,18 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Surface(color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(20.dp), tonalElevation = 1.dp) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text("Светлая тема", fontWeight = FontWeight.SemiBold)
+                                    Text("Мягкое светлое оформление MC", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                Switch(checked = lightTheme, onCheckedChange = {
+                                    lightTheme = it
+                                    repo.setLightThemeEnabled(it)
+                                })
+                            }
+                        }
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
                         Text(
                             when {
@@ -710,7 +737,7 @@ class MainActivity : ComponentActivity() {
                         val email = selected!!
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
                         Conversation(
-                            chat, Modifier.padding(padding), isSyncing = syncInProgress,
+                            chat, Modifier.padding(padding), isSyncing = syncInProgress, isLightTheme = lightTheme,
                             onRefresh = { syncNow(source = "жест обновления переписки") },
                             onSend = { body, editing ->
                                 val outgoing = if (editing == null) {
@@ -1003,6 +1030,7 @@ class MainActivity : ComponentActivity() {
         chat: McChat,
         modifier: Modifier,
         isSyncing: Boolean,
+        isLightTheme: Boolean,
         onRefresh: () -> Unit,
         onSend: (String, McMessage?) -> Unit,
         onDeleteMessage: (McMessage) -> Unit
@@ -1105,7 +1133,9 @@ class MainActivity : ComponentActivity() {
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
-                            color = if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            color = if (isLightTheme) {
+                                if (message.deleted) Color(0xFFE9EDF2) else if (message.incoming) Color(0xFFFFFFFF) else Color(0xFFE4F0FF)
+                            } else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
@@ -1121,15 +1151,15 @@ class MainActivity : ComponentActivity() {
                                 )
                             } else {
                                 Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 6.dp)) {
-                                    if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                    Text(message.text, lineHeight = 18.sp)
+                                    if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = if (isLightTheme) Color(0xFF9A6416) else Color(0xFFFFC56B))
+                                    Text(message.text, lineHeight = 18.sp, color = if (isLightTheme) Color(0xFF202A36) else Color(0xFFEAF0F6))
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         val messageDate = Date(message.timestamp * 1000L)
-                                        val dateTimeColor = Color.LightGray.copy(alpha = 0.8f)
+                                        val dateTimeColor = if (isLightTheme) Color(0xFF758294) else Color.LightGray.copy(alpha = 0.8f)
                                         if (message.version > 1L) {
                                             Text("изменено   ", fontSize = 10.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                                         }
@@ -1191,7 +1221,7 @@ class MainActivity : ComponentActivity() {
             }
             Surface(
                 modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFF1A2A39),
+                color = if (isLightTheme) Color(0xFFFFFFFF) else Color(0xFF1A2A39),
                 shape = RoundedCornerShape(26.dp)
             ) {
                 Row(Modifier.padding(start = 12.dp, end = 5.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
