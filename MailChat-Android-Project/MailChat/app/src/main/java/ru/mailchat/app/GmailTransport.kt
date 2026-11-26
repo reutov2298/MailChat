@@ -104,11 +104,12 @@ class GmailTransport {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
             technical.forEach { append(it).append("\r\n") }
-            append("\r\nНиже приведены технические данные MC, продублированные из заголовков электронного письма:\r\n")
+            append("\r\n")
+            append(normalizedText.replace("\n", "\r\n"))
+            append("\r\n")
             append("-----BEGIN MC DATA-----\r\n")
             technical.forEach { append(it).append("\r\n") }
-            append("-----END MC DATA-----\r\n\r\n")
-            append(normalizedText.replace("\n", "\r\n"))
+            append("-----END MC DATA-----\r\n")
         }
         val encoded = Base64.encodeToString(mime.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val payload = JSONObject().put("raw", encoded).toString()

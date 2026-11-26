@@ -72,6 +72,64 @@ import kotlin.math.ceil
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
 
+private fun profileInitials(name: String): String {
+    val normalized = name.substringBefore('@').replace(Regex("[._-]+"), " ").trim()
+    val parts = normalized.split(Regex("\\s+")).filter { it.isNotBlank() }
+    return when {
+        parts.size >= 2 -> (parts.first().first().toString() + parts.last().first().toString()).uppercase(Locale.getDefault())
+        parts.isNotEmpty() -> parts.first().take(2).uppercase(Locale.getDefault())
+        else -> "?"
+    }
+}
+
+@Composable
+private fun HeaderAvatar(
+    photoUrl: String?,
+    displayName: String,
+    size: androidx.compose.ui.unit.Dp = 40.dp,
+    endPadding: androidx.compose.ui.unit.Dp = 12.dp
+) {
+    val avatarHost = remember(photoUrl) {
+        if (photoUrl.isNullOrBlank()) "none"
+        else runCatching { java.net.URI(photoUrl).host }.getOrNull() ?: "unknown"
+    }
+    Box(
+        Modifier.padding(end = endPadding).size(size).clip(CircleShape).background(Blue),
+        contentAlignment = Alignment.Center
+    ) {
+        // Initials remain visible as the background while Coil loads, and if loading fails.
+        Text(
+            profileInitials(displayName),
+            color = Color.White,
+            fontSize = if (size >= 48.dp) 20.sp else 15.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+        if (!photoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = photoUrl,
+                contentDescription = "Аватар профиля",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onLoading = {
+                    android.util.Log.i("MCAvatar", "Image load started: host=$avatarHost")
+                },
+                onSuccess = { state ->
+                    android.util.Log.i(
+                        "MCAvatar",
+                        "Image load succeeded: host=$avatarHost, size=${state.result.drawable.intrinsicWidth}x${state.result.drawable.intrinsicHeight}"
+                    )
+                },
+                onError = { state ->
+                    android.util.Log.w(
+                        "MCAvatar",
+                        "Image load failed: host=$avatarHost, error=${state.result.throwable.javaClass.simpleName}"
+                    )
+                }
+            )
+        }
+    }
+}
+
 class MainActivity : ComponentActivity() {
     private lateinit var auth: McAuth
     private lateinit var repo: McRepository
@@ -455,16 +513,31 @@ class MainActivity : ComponentActivity() {
                 },
                 topBar = {
                 TopAppBar(title = {
-                    Column {
-                        Text(
-                            if (logs) "Логирование" else if (settings) "Настройки"
-                            else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
-                            fontWeight = FontWeight.Bold
-                        )
-                        val subtitle = if (selectedChat != null) {
-                            selectedChat.email.takeIf { !selectedChat.title.equals(selectedChat.email, true) }.orEmpty()
-                        } else if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail"
-                        if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (!logs && !settings) {
+                            if (selectedChat != null) {
+                                HeaderAvatar(
+                                    selectedChat.avatarUrl,
+                                    selectedChat.senderName?.takeIf { it.isNotBlank() } ?: selectedChat.title
+                                )
+                            } else {
+                                val ownName = repo.ownProfileName().ifBlank {
+                                    accountEmail.ifBlank { repo.myEmail() }
+                                }
+                                HeaderAvatar(repo.ownProfileAvatar(), ownName)
+                            }
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                if (logs) "Логирование" else if (settings) "Настройки"
+                                else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
+                                fontWeight = FontWeight.Bold
+                            )
+                            val subtitle = if (selectedChat != null) {
+                                selectedChat.email.takeIf { !selectedChat.title.equals(selectedChat.email, true) }.orEmpty()
+                            } else if (token != null) accountEmail.ifBlank { repo.myEmail() } else "Мессенджер на Gmail"
+                            if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }, navigationIcon = {
                     if (selected != null || settings || logs) IconButton(onClick = {
@@ -699,15 +772,12 @@ class MainActivity : ComponentActivity() {
                                         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                                     ) {
                                         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            if (!chat.avatarUrl.isNullOrBlank()) {
-                                                AsyncImage(model = chat.avatarUrl, contentDescription = "Фото контакта",
-                                                    modifier = Modifier.size(50.dp).clip(CircleShape).background(Blue),
-                                                    contentScale = ContentScale.Crop)
-                                            } else {
-                                                Box(Modifier.size(50.dp).background(Blue, CircleShape), contentAlignment = Alignment.Center) {
-                                                    Text(chat.title.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                                                }
-                                            }
+                                            HeaderAvatar(
+                                                chat.avatarUrl,
+                                                chat.senderName?.takeIf { it.isNotBlank() } ?: chat.title,
+                                                size = 50.dp,
+                                                endPadding = 0.dp
+                                            )
                                             Spacer(Modifier.width(13.dp))
                                             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                                 Text(chat.title, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, color = Color(0xFFF1F5F9), maxLines = 1)
