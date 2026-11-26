@@ -61,7 +61,7 @@ class McAuth(private val context: Context) {
         return true
     }
 
-    fun accessToken(callback: (String?, String?) -> Unit) {
+    fun accessToken(forceRefresh: Boolean = false, callback: (String?, String?) -> Unit) {
         val shouldStart = synchronized(refreshLock) {
             refreshWaiters.add(callback)
             if (refreshInProgress) false else {
@@ -86,6 +86,7 @@ class McAuth(private val context: Context) {
                 return
             }
             val state = AuthState.jsonDeserialize(json)
+            if (forceRefresh) state.needsTokenRefresh = true
             state.performActionWithFreshTokens(service) { access, _, ex ->
                 if (access != null) {
                     // Persist AppAuth's updated refresh/access-token state before waking
