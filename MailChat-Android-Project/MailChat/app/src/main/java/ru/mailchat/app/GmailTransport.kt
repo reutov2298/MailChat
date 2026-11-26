@@ -146,6 +146,11 @@ class GmailTransport {
         response.split("--$responseBoundary").forEach { part ->
             val httpStart = part.indexOf("HTTP/1.")
             if (httpStart < 0) return@forEach
+            val innerStatus = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part.substring(httpStart))
+                ?.groupValues?.get(1)?.toIntOrNull()
+            if (innerStatus != null && innerStatus !in 200..299) {
+                throw GmailApiException(innerStatus, part.substring(httpStart).take(300))
+            }
             val jsonStart = part.indexOf("{", httpStart)
             val jsonEnd = part.lastIndexOf("}")
             if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
