@@ -1197,7 +1197,7 @@ class MainActivity : ComponentActivity() {
             if (isSyncing) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
-                    color = if (lightTheme) Color(0xFF42566F).copy(alpha = 0.92f) else Navy.copy(alpha = 0.85f),
+                    color = if (isLightTheme) Color(0xFF42566F).copy(alpha = 0.92f) else Navy.copy(alpha = 0.85f),
                     shape = RoundedCornerShape(20.dp),
                     shadowElevation = 4.dp
                 ) {
