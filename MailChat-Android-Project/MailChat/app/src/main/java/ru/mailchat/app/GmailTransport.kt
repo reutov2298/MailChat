@@ -12,6 +12,8 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class GmailTransport {
+    class GmailApiException(val statusCode: Int, val responseBody: String) :
+        IllegalStateException("Gmail API $statusCode: ${responseBody.take(300)}")
     companion object {
         // Serialize Gmail API calls across all transport instances and keep a
         // minimum gap between request starts to prevent bursts from sync/send/worker.
@@ -47,7 +49,7 @@ class GmailTransport {
             }
             http.newCall(builder.build()).execute().use { response ->
                 val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw IllegalStateException("Gmail API ${response.code}: ${text.take(400)}")
+                if (!response.isSuccessful) throw GmailApiException(response.code, text)
                 text
             }
         }
@@ -100,6 +102,11 @@ class GmailTransport {
         val avatarHeader = Base64.encodeToString(senderAvatarUrl.orEmpty().take(700).toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         technical.add("X-MC-Sender-Name: $nameHeader")
         technical.add("X-MC-Sender-Avatar: $avatarHeader")
+        // Preserve the exact signed UTF-8 text independently of Gmail MIME body normalization.
+        val textBase64 = java.util.Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(normalizedText.toByteArray(StandardCharsets.UTF_8))
+        val dataTechnical = technical.toMutableList()
+        dataTechnical.add("X-MC-Text-Base64: " + textBase64.chunked(72).joinToString("\r\n "))
         val mime = buildString {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
@@ -108,7 +115,7 @@ class GmailTransport {
             append(normalizedText.replace("\n", "\r\n"))
             append("\r\n")
             append("-----BEGIN MC DATA-----\r\n")
-            technical.forEach { append(it).append("\r\n") }
+            dataTechnical.forEach { append(it).append("\r\n") }
             append("-----END MC DATA-----\r\n")
         }
         val encoded = Base64.encodeToString(mime.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
