@@ -10,6 +10,11 @@ import net.openid.appauth.*
 import org.json.JSONObject
 
 class McAuth(private val context: Context) {
+    companion object {
+        private val refreshLock = Any()
+        private var refreshInProgress = false
+        private val refreshWaiters = mutableListOf<(String?, String?) -> Unit>()
+    }
     private val service = AuthorizationService(context)
     private val config = AuthorizationServiceConfiguration(
         Uri.parse(GmailConfig.AUTHORIZATION_ENDPOINT), Uri.parse(GmailConfig.TOKEN_ENDPOINT)
@@ -57,17 +62,43 @@ class McAuth(private val context: Context) {
     }
 
     fun accessToken(callback: (String?, String?) -> Unit) {
-        val json = prefs.getString("auth_state", null)
-        if (json == null) { callback(null, "Аккаунт Google не подключён"); return }
+        val shouldStart = synchronized(refreshLock) {
+            refreshWaiters.add(callback)
+            if (refreshInProgress) false else {
+                refreshInProgress = true
+                true
+            }
+        }
+        if (!shouldStart) return
+
+        fun finish(access: String?, error: String?) {
+            val callbacks = synchronized(refreshLock) {
+                refreshInProgress = false
+                refreshWaiters.toList().also { refreshWaiters.clear() }
+            }
+            callbacks.forEach { waiter -> runCatching { waiter(access, error) } }
+        }
+
         try {
+            val json = prefs.getString("auth_state", null)
+            if (json == null) {
+                finish(null, "Аккаунт Google не подключён")
+                return
+            }
             val state = AuthState.jsonDeserialize(json)
             state.performActionWithFreshTokens(service) { access, _, ex ->
                 if (access != null) {
-                    prefs.edit().putString("auth_state", state.jsonSerializeString()).apply()
-                    callback(access, null)
-                } else callback(null, ex?.errorDescription ?: "Не удалось обновить авторизацию")
+                    // Persist AppAuth's updated refresh/access-token state before waking
+                    // callers, so foreground and background sync never race stale copies.
+                    prefs.edit().putString("auth_state", state.jsonSerializeString()).commit()
+                    finish(access, null)
+                } else {
+                    finish(null, ex?.errorDescription ?: ex?.message ?: "Не удалось обновить авторизацию")
+                }
             }
-        } catch (e: Exception) { callback(null, e.message ?: "Ошибка сохранённой авторизации") }
+        } catch (e: Exception) {
+            finish(null, e.message ?: "Ошибка сохранённой авторизации")
+        }
     }
     fun isConnected(): Boolean = prefs.getString("auth_state", null) != null
     fun disconnect() { prefs.edit().clear().apply() }
