@@ -306,7 +306,9 @@ class MainActivity : ComponentActivity() {
                             threadId = repo.gmailThreadId(accountEmail.ifBlank { repo.myEmail() }, to),
                             previousRfcMessageId = repo.gmailLastMessageId(accountEmail.ifBlank { repo.myEmail() }, to)
                         ) { bytes -> McCrypto.sign(pair, bytes) }
-                        gmail.labelSent(fresh, result.id, labelId)
+                        val actualLabelId = gmail.labelSent(fresh, result.id, labelId)
+                        repo.setMcLabelId(actualLabelId)
+                        repo.markProcessed(result.id)
                         repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, to, result.threadId, result.rfcMessageId)
                         result
                     }
@@ -455,7 +457,8 @@ class MainActivity : ComponentActivity() {
                             current[index] = current[index].copy(messages = repo.orderedMessages(updatedMessages))
                         } else {
                             repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, parsed.sender, mail.threadId, mail.headers["message-id"])
-                            gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
+                            val actualLabelId = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
+                            repo.setMcLabelId(actualLabelId)
                             repo.markProcessed(mail.id)
                             skipped++
                             continue
@@ -480,7 +483,8 @@ class MainActivity : ComponentActivity() {
 
                     repo.save(current)
                     repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, parsed.sender, mail.threadId, mail.headers["message-id"])
-                    gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
+                    val actualLabelId = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
+                    repo.setMcLabelId(actualLabelId)
                     repo.markProcessed(mail.id)
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
