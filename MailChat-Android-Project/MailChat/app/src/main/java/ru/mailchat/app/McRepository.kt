@@ -42,7 +42,11 @@ class McRepository(context: Context) {
     private fun mailboxKey(name: String): String =
         "gmail_" + name + ":" + myEmail().trim().lowercase()
     fun historyId(): String = prefs.getString(mailboxKey("history_id"), "").orEmpty()
-    fun setHistoryId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("history_id"), value).commit() }
+    fun setHistoryId(value: String) {
+        if (value.isNotBlank()) check(prefs.edit().putString(mailboxKey("history_id"), value).commit()) {
+            "Не удалось сохранить Gmail History cursor"
+        }
+    }
 
     // Durable per-mailbox queue: a History ID remains pending until it is processed
     // or Gmail confirms that the message has already disappeared (HTTP 404).
