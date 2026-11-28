@@ -112,7 +112,7 @@ GitHub Actions workflow: `.github/workflows/android-build.yml`.
 - Gradle 8.9
 - Build task: `gradle testDebugUnitTest` followed by `gradle assembleDebug`
 - Проверяется applicationId, versionName, versionCode и постоянная подпись APK.
-- Artifact name: `MC-1.1.10-build43`
+- Artifact name: `MC-1.1.11-build44`
 - В архиве находится `app-debug.apk`.
 
 Для подписанной сборки в repository secrets должны быть заданы `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` и `KEY_PASSWORD`.
@@ -169,3 +169,28 @@ GitHub Actions workflow: `.github/workflows/android-build.yml`.
 10. Проверить восстановительный сценарий при устаревшем History cursor.
 11. Проверить логи на наличие HTTP 403/429, задержек повторных попыток и отсутствия токенов/текста писем.
 
+
+
+## Rejected incoming MC messages and support diagnostics (1.1.11)
+
+- A message recognized as MC but rejected by local protocol or cryptographic verification is not inserted as a normal chat message.
+- The sender's chat receives a durable warning entry showing the reason, stable error code and Gmail message ID. If the sender address cannot be extracted, the entry is placed in the local **Ошибки обработки** chat.
+- The entry has a **Скопировать для техподдержки** action. The copied report contains the error code, human-readable reason, Gmail ID and bounded technical diagnostics. It does not contain the message body, OAuth tokens, private keys, raw public keys or raw signatures.
+- The Gmail ID is recorded in a separate per-mailbox rejected/quarantine set, the warning entry is persisted, and only then is the ID marked processed and removed from the pending queue. Repeated processing is idempotent.
+- Local verification failures (malformed Base64, missing/invalid fields, unsupported protocol values, invalid public key or failed Ed25519 signature) are terminal rejections. Gmail API, network and storage failures remain retryable and continue to block cursor advancement until resolved.
+- MIME transport whitespace (space, tab, CR and LF) is removed only inside Base64-encoded transport fields. The field-specific alphabet and padding are validated before decoding. Canonical signed content is not normalized or weakened.
+- Manual and WorkManager synchronization use the same rejection and quarantine behavior.
+
+### Test checklist for 1.1.11
+
+1. Valid Base64 public key, signature, text and profile fields still verify.
+2. MIME folding in Base64 fields is normalized without changing the signed canonical payload.
+3. Illegal alphabet characters, impossible Base64 lengths and invalid padding are rejected with a field-specific diagnostic.
+4. Invalid Ed25519 signatures and malformed public keys are never accepted as chat messages.
+5. A rejected incoming message creates one warning entry in the sender's chat and survives application restart.
+6. The warning entry's copy action includes error code, reason, Gmail ID and safe diagnostics, but no message content or secrets.
+7. Reprocessing the same Gmail ID does not create another warning entry.
+8. A durably quarantined Gmail ID is removed from pending and no longer blocks History cursor advancement.
+9. Network/API/storage failures remain retryable and do not become quarantined terminal errors.
+10. Foreground and WorkManager synchronization produce the same result.
+11. Run all unit tests before APK assembly; verify the APK package, version and permanent signing certificate.
