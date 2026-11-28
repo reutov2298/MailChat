@@ -154,7 +154,9 @@ class McRepository(context: Context) {
     fun markProcessed(id: String) {
         val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(id)
-        prefs.edit().putStringSet("processed", set).commit()
+        check(prefs.edit().putStringSet("processed", set).commit()) {
+            "Не удалось сохранить статус обработки Gmail ID"
+        }
     }
 
     fun restoreChat(email: String) {
