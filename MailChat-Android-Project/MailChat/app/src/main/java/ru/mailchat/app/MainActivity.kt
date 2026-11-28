@@ -389,12 +389,12 @@ class MainActivity : ComponentActivity() {
                                 if (e.statusCode != 404) throw e
                                 logger.error("Gmail historyId устарел; выполняется восстановительная синхронизация")
                                 nextHistoryId = gmail.profile(fresh).historyId
-                                gmail.list(fresh, "after:$since {in:inbox in:spam}", 50)
+                                gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
                             }
                         } else {
                             logger.info("Для этого аккаунта ещё нет History cursor; выполняется первичная выборка после контрольной даты")
                             nextHistoryId = gmail.profile(fresh).historyId
-                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50)
+                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
                         }
                     }
                 }
