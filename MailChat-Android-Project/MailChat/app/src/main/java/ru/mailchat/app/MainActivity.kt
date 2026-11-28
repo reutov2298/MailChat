@@ -826,10 +826,10 @@ class MainActivity : ComponentActivity() {
                         Slider(
                             value = chatMetadataFontSizeSp.toFloat(),
                             onValueChange = {
-                                chatMetadataFontSizeSp = it.roundToInt().coerceIn(8, 16)
+                                chatMetadataFontSizeSp = ChatAppearanceSettingsPolicy.normalizeFontSizeSp(it.roundToInt())
                                 repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp)
                             },
-                            valueRange = 8f..16f,
+                            valueRange = ChatAppearanceSettingsPolicy.MIN_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_FONT_SIZE_SP.toFloat(),
                             steps = 7
                         )
                         HorizontalDivider()
@@ -856,7 +856,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Настройки экранов", fontWeight = FontWeight.Bold)
+                        Text("Интерфейс", fontWeight = FontWeight.Bold)
                         OutlinedButton(onClick = { screenSettings = true }, modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("Настройки экранов")
