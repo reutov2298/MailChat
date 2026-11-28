@@ -157,59 +157,16 @@ class GmailTransport {
 
     fun list(token: String, query: String, max: Int = 50, excludeIds: Set<String> = emptySet()): List<RemoteMessage> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&includeSpamTrash=true&q=$q", token))
+        val root = JSONObject(request(GmailConfig.GMAIL_API + "/messages?maxResults=" + max + "&includeSpamTrash=true&q=" + q, token))
         val ids = root.optJSONArray("messages") ?: return emptyList()
         if (ids.length() == 0) return emptyList()
         val messageIds = (0 until ids.length())
             .mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
             .distinct()
             .filterNot(excludeIds::contains)
-        if (messageIds.isEmpty()) return emptyList()
-        val boundary = "mc_batch_${UUID.randomUUID().toString().replace("-", "")}"
-        val batchBody = buildString {
-            messageIds.forEachIndexed { index, id ->
-                append("--").append(boundary).append("\r\nContent-Type: application/http\r\n")
-                append("Content-ID: <mc-").append(index).append(">\r\n\r\n")
-                append("GET /gmail/v1/users/me/messages/").append(id).append("?format=full HTTP/1.1\r\n\r\n")
-            }
-            append("--").append(boundary).append("--\r\n")
-        }
-        val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", batchBody, "multipart/mixed; boundary=$boundary")
-        val responseBoundary = Regex("(?m)^--([^\\r\\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
-            ?: throw IllegalStateException("Gmail batch response has no boundary")
-        val result = mutableListOf<RemoteMessage>()
-        response.split("--$responseBoundary").forEach { part ->
-            val httpStart = part.indexOf("HTTP/1.")
-            if (httpStart < 0) return@forEach
-            val innerStatus = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part.substring(httpStart))
-                ?.groupValues?.get(1)?.toIntOrNull()
-            if (innerStatus != null && innerStatus !in 200..299) {
-                throw GmailApiException(innerStatus, part.substring(httpStart).take(300))
-            }
-            val jsonStart = part.indexOf("{", httpStart)
-            val jsonEnd = part.lastIndexOf("}")
-            if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
-            val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
-            val payload = j.optJSONObject("payload")
-            val headers = payload?.optJSONArray("headers")
-            var from = ""; var to = ""; var subject = ""
-            val headerMap = linkedMapOf<String, String>()
-            if (headers != null) for (i in 0 until headers.length()) {
-                val h = headers.getJSONObject(i); val hn = h.optString("name"); val hv = h.optString("value")
-                headerMap[hn.lowercase()] = hv
-                when (hn.lowercase()) { "from" -> from = hv; "to" -> to = hv; "subject" -> subject = hv }
-            }
-            val labels = j.optJSONArray("labelIds")
-            val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
-            result += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
-                extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap,
-                parseSenderDisplayName(from))
-        }
-        onDiagnostic?.invoke("Gmail batch: запрошено писем=${messageIds.size}, получено=${result.size}")
-        if (result.size != messageIds.size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
-        return result
+        onDiagnostic?.invoke("Gmail list: кандидатов=" + ids.length() + ", уже обработанных исключено=" + (ids.length() - messageIds.size))
+        return getMessages(token, messageIds)
     }
-
 
     /** Returns only message IDs added after the durable Gmail history cursor. */
     fun history(token: String, startHistoryId: String, maxResults: Int = 100): HistoryChanges {
