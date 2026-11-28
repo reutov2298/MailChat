@@ -134,21 +134,28 @@ object McProtocol {
             val finish = "-----END MC DATA-----"
             val start = mail.body.indexOf(begin)
             val end = mail.body.indexOf(finish)
+            val hasBodyBlock = start >= 0 && end > start
+            val bodyValues = if (hasBodyBlock) {
+                parseBlock(mail.body.substring(start + begin.length, end))
+            } else emptyMap()
 
-            if (start < 0 || end <= start) {
-                return Verification(null, "В теле письма не найдены маркеры MC DATA")
-            }
-
-            val block = mail.body.substring(start + begin.length, end)
-            val values = parseBlock(block)
-
-            // Заголовки Gmail — резервный источник недостающих значений.
+            // RFC/MIME headers are the authoritative transport for protocol data.
+            // The visible body block is optional and retained for compatibility/debugging.
+            val values = linkedMapOf<String, String>()
             for ((key, value) in mail.headers) {
-                val normalized = key.lowercase()
-                if (values[normalized].isNullOrBlank() && value.isNotBlank()) {
-                    values[normalized] = value.trim()
+                if (key.lowercase().startsWith("x-mc-") && value.isNotBlank()) {
+                    values[key.lowercase()] = value.trim()
                 }
             }
+            // Legacy messages may carry X-MC-Text-Base64 only inside the visible body block.
+            for ((key, value) in bodyValues) {
+                val headerValue = values[key]
+                if (headerValue != null && headerValue != value) {
+                    return Verification(null, "Значение $key в теле не совпадает с MIME-заголовком")
+                }
+                if (headerValue == null) values[key] = value
+            }
+            if (values.isEmpty()) return Verification(null, "Не найдены служебные данные MC в MIME-заголовках или теле письма")
 
             for (key in required) {
                 if (values[key].isNullOrBlank()) {
@@ -188,21 +195,24 @@ object McProtocol {
                 )
             )
 
-            // New format: message text precedes MC DATA. Legacy format: text follows END marker.
-            // Remove only the single line break added as the separator before/after the technical block.
-            val textBeforeBlock = mail.body.substring(0, start)
-            val textAfterBlock = mail.body.substring(end + finish.length)
-            val rawText = if (textBeforeBlock.isNotEmpty()) {
-                textBeforeBlock.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
-            } else {
-                when {
-                    textAfterBlock.startsWith("\r\n\r\n") -> textAfterBlock.substring(4)
-                    textAfterBlock.startsWith("\n\n") -> textAfterBlock.substring(2)
-                    textAfterBlock.startsWith("\r\n") -> textAfterBlock.substring(2)
-                    textAfterBlock.startsWith("\n") -> textAfterBlock.substring(1)
-                    else -> textAfterBlock
+            // New messages always put user text first. If the optional block exists, strip it;
+            // otherwise the complete MIME body is the visible message text. Legacy messages
+            // with text after END MC DATA remain supported.
+            val rawText = if (hasBodyBlock) {
+                val textBeforeBlock = mail.body.substring(0, start)
+                val textAfterBlock = mail.body.substring(end + finish.length)
+                if (textBeforeBlock.isNotEmpty()) {
+                    textBeforeBlock.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
+                } else {
+                    when {
+                        textAfterBlock.startsWith("\r\n\r\n") -> textAfterBlock.substring(4)
+                        textAfterBlock.startsWith("\n\n") -> textAfterBlock.substring(2)
+                        textAfterBlock.startsWith("\r\n") -> textAfterBlock.substring(2)
+                        textAfterBlock.startsWith("\n") -> textAfterBlock.substring(1)
+                        else -> textAfterBlock
+                    }
                 }
-            }
+            } else mail.body.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
             // Protocol v3 senders include the exact UTF-8 text bytes as URL-safe Base64.
             // Prefer this signed representation over the MIME display body, which Gmail
             // is allowed to normalize (line endings, transfer encoding, etc.).
