@@ -304,7 +304,8 @@ class MainActivity : ComponentActivity() {
                             senderName = repo.ownProfileName(),
                             senderAvatarUrl = repo.ownProfileAvatar(),
                             threadId = repo.gmailThreadId(account, to),
-                            previousRfcMessageId = repo.gmailLastMessageId(account, to)
+                            previousRfcMessageId = repo.gmailLastMessageId(account, to),
+                            showTechnicalInfo = repo.showTechnicalInfoEnabled()
                         ) { bytes -> McCrypto.sign(pair, bytes) }
                     }
                 }
@@ -530,6 +531,7 @@ class MainActivity : ComponentActivity() {
         var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
         var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
+        var showTechnicalInfo by remember { mutableStateOf(repo.showTechnicalInfoEnabled()) }
         val pendingDeleteDeadlines = remember { mutableStateMapOf<String, Long>().apply { putAll(repo.pendingChatDeletions()) } }
         var deleteCountdownNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val logListState = rememberLazyListState()
@@ -565,7 +567,8 @@ class MainActivity : ComponentActivity() {
                 openSeconds.toIntOrNull() ?: repo.openIntervalSeconds(),
                 minimizedSeconds.toIntOrNull() ?: repo.minimizedIntervalSeconds(),
                 closedSeconds.toIntOrNull() ?: repo.closedIntervalSeconds(),
-                diagnosticClick
+                diagnosticClick,
+                showTechnicalInfo
             )
             McSyncScheduler.schedule(this@MainActivity, repo.closedIntervalSeconds())
             restartAutoSyncLoop()
@@ -735,6 +738,13 @@ class MainActivity : ComponentActivity() {
                         }
                         if (token != null || auth.isConnected()) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        HorizontalDivider()
+                        Text("Отправка сообщений", fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = showTechnicalInfo, onCheckedChange = { showTechnicalInfo = it })
+                            Text("Показывать техническую информацию в письме", fontSize = 14.sp)
+                        }
+                        Text("Если флажок снят, в теле письма будет только текст сообщения. Служебные данные MC всё равно передаются в MIME-заголовках и используются для проверки и синхронизации.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
