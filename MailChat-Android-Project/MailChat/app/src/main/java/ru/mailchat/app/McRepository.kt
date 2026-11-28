@@ -38,9 +38,79 @@ class McRepository(context: Context) {
     }
 
     fun baseline(): Long = prefs.getLong("baseline", 0L)
-    fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
+    fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).commit() }
+    private fun mailboxKey(name: String): String =
+        "gmail_" + name + ":" + myEmail().trim().lowercase()
+    fun historyId(): String = prefs.getString(mailboxKey("history_id"), "").orEmpty()
+    fun setHistoryId(value: String) {
+        if (value.isNotBlank()) check(prefs.edit().putString(mailboxKey("history_id"), value).commit()) {
+            "Не удалось сохранить Gmail History cursor"
+        }
+    }
+
+    // Durable per-mailbox queue: a History ID remains pending until it is processed
+    // or Gmail confirms that the message has already disappeared (HTTP 404).
+    private fun pendingRetryState(): JSONObject =
+        try { JSONObject(prefs.getString(mailboxKey("pending_retry_state"), "{}")) } catch (_: Exception) { JSONObject() }
+
+    fun isPendingHistoryRetryDue(id: String, now: Long = System.currentTimeMillis()): Boolean =
+        pendingRetryState().optJSONObject(id)?.optLong("nextAt", 0L)?.let { it <= now } ?: true
+
+    /** Exponential retry delay: 30 s, 60 s, 120 s ... capped at 6 hours. */
+    fun schedulePendingHistoryRetry(id: String): Long {
+        val key = mailboxKey("pending_retry_state")
+        val state = pendingRetryState()
+        val previousAttempts = state.optJSONObject(id)?.optInt("attempts", 0) ?: 0
+        val exponent = previousAttempts.coerceIn(0, 10)
+        val delayMs = (30_000L * (1L shl exponent)).coerceAtMost(6L * 60L * 60L * 1000L)
+        state.put(id, JSONObject().put("attempts", previousAttempts + 1).put("nextAt", System.currentTimeMillis() + delayMs))
+        check(prefs.edit().putString(key, state.toString()).commit()) { "Не удалось сохранить время повторной обработки Gmail ID" }
+        return delayMs
+    }
+
+    fun pendingHistoryIds(): Set<String> =
+        prefs.getStringSet(mailboxKey("pending_history_ids"), emptySet())?.toSet().orEmpty()
+
+    fun addPendingHistoryIds(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val key = mailboxKey("pending_history_ids")
+        val pending = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (pending.addAll(ids.filter(String::isNotBlank))) {
+            check(prefs.edit().putStringSet(key, pending).commit()) {
+                "Не удалось сохранить очередь Gmail History"
+            }
+        }
+    }
+
+    fun removePendingHistoryIds(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val pendingKey = mailboxKey("pending_history_ids")
+        val pending = prefs.getStringSet(pendingKey, emptySet())?.toMutableSet() ?: mutableSetOf()
+        pending.removeAll(ids.toSet())
+        val retryKey = mailboxKey("pending_retry_state")
+        val retryState = pendingRetryState()
+        ids.forEach(retryState::remove)
+        check(prefs.edit().putStringSet(pendingKey, pending).putString(retryKey, retryState.toString()).commit()) {
+            "Не удалось очистить состояние обработки Gmail ID"
+        }
+    }
+
+    fun mcLabelId(): String = prefs.getString(mailboxKey("mc_label_id"), "").orEmpty()
+    fun setMcLabelId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("mc_label_id"), value).commit() }
+    private fun gmailThreadKey(account: String, chat: String, suffix: String): String =
+        "gmail_" + suffix + ":" + account.trim().lowercase() + ":" + chat.trim().lowercase()
+    fun gmailThreadId(account: String, chat: String): String =
+        prefs.getString(gmailThreadKey(account, chat, "thread"), "").orEmpty()
+    fun gmailLastMessageId(account: String, chat: String): String =
+        prefs.getString(gmailThreadKey(account, chat, "message"), "").orEmpty()
+    fun saveGmailThread(account: String, chat: String, threadId: String?, rfcMessageId: String?) {
+        val edit = prefs.edit()
+        if (!threadId.isNullOrBlank()) edit.putString(gmailThreadKey(account, chat, "thread"), threadId)
+        if (!rfcMessageId.isNullOrBlank()) edit.putString(gmailThreadKey(account, chat, "message"), rfcMessageId)
+        edit.commit()
+    }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
-    fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
+    fun setEmail(value: String) { prefs.edit().putString("email", value).commit() }
     fun ownProfileName(): String = prefs.getString("own_profile_name", "").orEmpty()
     fun ownProfileAvatar(): String = prefs.getString("own_profile_avatar", "").orEmpty()
     fun setOwnProfile(name: String?, avatar: String?) {
@@ -52,34 +122,113 @@ class McRepository(context: Context) {
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 30)
     fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 60)
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
+    fun showTechnicalInfoEnabled(): Boolean = prefs.getBoolean("show_technical_info_in_email", false)
 
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
         if (prefs.getLong("sync_lock_until", 0L) > now) return@synchronized false
-        prefs.edit().putLong("sync_lock_until", now + 10 * 60 * 1000L).apply()
+        prefs.edit().putLong("sync_lock_until", now + 10 * 60 * 1000L).commit()
         true
     }
 
     fun releaseSyncLock() = synchronized(syncLock) {
-        prefs.edit().putLong("sync_lock_until", 0L).apply()
+        prefs.edit().putLong("sync_lock_until", 0L).commit()
     }
 
-    fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean) {
+    fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean, showTechnicalInfo: Boolean) {
         prefs.edit()
             .putInt("sync_open_seconds", open.coerceIn(5, 86400))
             .putInt("sync_minimized_seconds", minimized.coerceIn(5, 86400))
             .putInt("sync_closed_seconds", closed.coerceIn(60, 604800))
             .putBoolean("sync_diagnostic_click", diagnosticClick)
+            .putBoolean("show_technical_info_in_email", showTechnicalInfo)
             .apply()
     }
 
     fun isProcessed(id: String): Boolean =
         prefs.getStringSet("processed", emptySet())?.contains(id) == true
 
+    fun processedIds(): Set<String> =
+        prefs.getStringSet("processed", emptySet())?.toSet().orEmpty()
+
     fun markProcessed(id: String) {
         val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(id)
-        prefs.edit().putStringSet("processed", set).apply()
+        check(prefs.edit().putStringSet("processed", set).commit()) {
+            "Не удалось сохранить статус обработки Gmail ID"
+        }
+    }
+
+    fun isRejectedHistoryId(id: String): Boolean =
+        prefs.getStringSet(mailboxKey("rejected_history_ids"), emptySet())?.contains(id) == true
+
+    /**
+     * Persist a terminally rejected incoming MC email as a visible chat entry before
+     * acknowledging its Gmail ID. Repeated calls are idempotent.
+     */
+    fun recordRejectedIncoming(
+        senderEmail: String?,
+        gmailId: String,
+        errorCode: String,
+        reason: String,
+        diagnostics: String
+    ): Boolean {
+        require(gmailId.isNotBlank()) { "Gmail ID is required for quarantine" }
+        if (isRejectedHistoryId(gmailId)) {
+            markProcessed(gmailId)
+            removePendingHistoryIds(listOf(gmailId))
+            return false
+        }
+
+        val fallbackChat = "mc-errors@local.invalid"
+        val sender = senderEmail?.trim()?.lowercase()?.takeIf { it.contains("@") } ?: fallbackChat
+        val now = System.currentTimeMillis() / 1000L
+        val messageId = "mc-error:$gmailId"
+        val current = chats().toMutableList()
+        val alreadyVisible = current.any { chat -> chat.messages.any { it.id == messageId } }
+        if (!alreadyVisible) {
+            val errorMessage = McMessage(
+                id = messageId,
+                chatId = sender,
+                sender = sender,
+                recipient = myEmail(),
+                text = reason.ifBlank { "Не удалось обработать входящее сообщение MC" },
+                timestamp = now,
+                incoming = true,
+                state = DeliveryState.FAILED,
+                isProcessingError = true,
+                errorCode = errorCode.ifBlank { "MC_MESSAGE_REJECTED" },
+                errorReason = reason.ifBlank { "Не удалось обработать входящее сообщение MC" },
+                errorDiagnostics = diagnostics.take(6000),
+                gmailId = gmailId
+            )
+            val index = current.indexOfFirst { it.email.equals(sender, true) }
+            if (index >= 0) {
+                current[index] = current[index].copy(
+                    messages = orderedMessages(current[index].messages + errorMessage)
+                )
+            } else {
+                current.add(
+                    McChat(
+                        email = sender,
+                        title = if (sender == fallbackChat) "Ошибки обработки" else sender,
+                        messages = listOf(errorMessage),
+                        nameManuallySet = sender == fallbackChat
+                    )
+                )
+            }
+            save(current)
+        }
+
+        val rejectedKey = mailboxKey("rejected_history_ids")
+        val rejected = prefs.getStringSet(rejectedKey, emptySet())?.toMutableSet() ?: mutableSetOf()
+        rejected.add(gmailId)
+        check(prefs.edit().putStringSet(rejectedKey, rejected).commit()) {
+            "Не удалось сохранить карантин Gmail ID"
+        }
+        markProcessed(gmailId)
+        removePendingHistoryIds(listOf(gmailId))
+        return true
     }
 
     fun restoreChat(email: String) {
@@ -104,7 +253,12 @@ class McRepository(context: Context) {
                     m.optLong("sequence", 0L),
                     m.optLong("version", 1L),
                     m.optBoolean("deleted", false),
-                    m.optLong("orderTimestamp", m.optLong("timestamp"))
+                    m.optLong("orderTimestamp", m.optLong("timestamp")),
+                    m.optBoolean("processingError", false),
+                    m.optString("errorCode"),
+                    m.optString("errorReason"),
+                    m.optString("errorDiagnostics"),
+                    m.optString("gmailId")
                 )
             }
             val email = j.optString("email")
@@ -136,11 +290,17 @@ class McRepository(context: Context) {
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                         .put("sequence", m.sequence).put("version", m.version).put("deleted", m.deleted)
                         .put("orderTimestamp", m.orderTimestamp)
+                        .put("processingError", m.isProcessingError)
+                        .put("errorCode", m.errorCode).put("errorReason", m.errorReason)
+                        .put("errorDiagnostics", m.errorDiagnostics).put("gmailId", m.gmailId)
                 )
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
-        prefs.edit().putString("chats", root.toString()).apply()
+        // Incoming messages must be durably stored before their Gmail IDs are acknowledged.
+        check(prefs.edit().putString("chats", root.toString()).commit()) {
+            "Не удалось надёжно сохранить локальную базу MC"
+        }
     }
 
     fun nextSequence(chatId: String, sender: String): Long {

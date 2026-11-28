@@ -45,39 +45,121 @@ class McSyncWorker(
                 onServerRequest = { logger.server("Запрос Gmail API (фоновый): $it") }
                 onDiagnostic = { logger.debug(it) }
             }
-            val since = repo.baseline().coerceAtLeast(1L)
-            val incoming = try {
-                withContext(Dispatchers.IO) { gmail.list(token, "after:$since {in:inbox in:spam}", 50) }
-            } catch (e: GmailTransport.GmailApiException) {
-                if (e.statusCode != 401) throw e
-                logger.error("Фоновая синхронизация получила HTTP 401; принудительно обновляем токен")
-                token = suspendCancellableCoroutine { continuation ->
-                    auth.accessToken(forceRefresh = true) { access, _ ->
-                        if (continuation.isActive) continuation.resume(access)
-                    }
-                } ?: return Result.retry()
-                logger.info("Фоновый токен Google обновлён; повторяем запрос один раз")
-                withContext(Dispatchers.IO) { gmail.list(token, "after:$since {in:inbox in:spam}", 50) }
+            suspend fun <T> gmailCall(block: suspend (String) -> T): T {
+                return try {
+                    block(token)
+                } catch (e: GmailTransport.GmailApiException) {
+                    if (e.statusCode != 401) throw e
+                    logger.error("Фоновая синхронизация получила HTTP 401; принудительно обновляем токен")
+                    token = suspendCancellableCoroutine { continuation ->
+                        auth.accessToken(forceRefresh = true) { access, _ ->
+                            if (continuation.isActive) continuation.resume(access)
+                        }
+                    } ?: throw IllegalStateException("Не удалось обновить токен Google")
+                    block(token)
+                }
             }
+            val since = repo.baseline().coerceAtLeast(1L)
+            val labelId = gmailCall { fresh -> withContext(Dispatchers.IO) {
+                repo.mcLabelId().ifBlank { gmail.ensureMcLabel(fresh).also(repo::setMcLabelId) }
+            } }
+            var nextHistoryId = ""
+            val incoming = gmailCall { fresh ->
+                withContext(Dispatchers.IO) {
+                    val completedPending = repo.pendingHistoryIds().filter(repo::isProcessed)
+                    repo.removePendingHistoryIds(completedPending)
+                    val cursor = repo.historyId()
+                    if (cursor.isNotBlank()) {
+                        try {
+                            val changes = gmail.history(fresh, cursor)
+                            nextHistoryId = changes.historyId
+                            val plan = GmailHistorySyncPolicy.plan(changes.messageIds, changes.deletedMessageIds)
+                            plan.deletedIds.forEach { id ->
+                                logger.debug("Gmail History: подтверждено удаление письма; Gmail ID=$id")
+                                repo.markProcessed(id)
+                                repo.removePendingHistoryIds(listOf(id))
+                            }
+                            repo.addPendingHistoryIds(plan.idsToFetch)
+                            val pendingIds = repo.pendingHistoryIds()
+                                .filterNot(repo::isProcessed)
+                                .filter(repo::isPendingHistoryRetryDue)
+                            val fetched = gmail.getMessages(fresh, pendingIds)
+                            val fetchedIds = fetched.map { it.id }.toSet()
+                            val disappeared = GmailHistorySyncPolicy.confirmedNotFoundIds(pendingIds, fetchedIds)
+                            disappeared.forEach { id ->
+                                logger.debug("Gmail History: Gmail подтвердил отсутствие письма (HTTP 404); ID=$id")
+                                repo.markProcessed(id)
+                            }
+                            if (disappeared.isNotEmpty()) repo.removePendingHistoryIds(disappeared)
+                            logger.debug("Gmail History: запрошено ID=${pendingIds.size}; получено=${fetchedIds.size}; подтверждённо удалено=${disappeared.size}")
+                            val trashedIds = fetched.filter { it.trashed }.map { it.id }
+                            trashedIds.forEach { id ->
+                                logger.debug("Gmail: письмо уже находится в корзине TRASH; импорт пропущен; ID=$id")
+                                repo.markProcessed(id)
+                            }
+                            if (trashedIds.isNotEmpty()) repo.removePendingHistoryIds(trashedIds)
+                            fetched.filterNot { it.trashed }
+                        } catch (e: GmailTransport.GmailApiException) {
+                            if (e.statusCode != 404) throw e
+                            logger.error("Фоновая синхронизация: historyId устарел, выполняется восстановительная выборка")
+                            nextHistoryId = gmail.profile(fresh).historyId
+                            val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            repo.addPendingHistoryIds(recovered.map { it.id })
+                            recovered
+                        }
+                    } else {
+                        nextHistoryId = gmail.profile(fresh).historyId
+                        val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                        repo.addPendingHistoryIds(recovered.map { it.id })
+                        recovered
+                    }
+                }
+            }
+            suspend fun labelIncomingOrAcceptDeletion(messageId: String): String? {
+                return try {
+                    withContext(Dispatchers.IO) {
+                        gmailCall { fresh -> gmail.labelIncoming(fresh, messageId, labelId) }
+                    }
+                } catch (e: GmailTransport.GmailApiException) {
+                    if (!GmailHistorySyncPolicy.isConfirmedDeletionStatus(e.statusCode)) throw e
+                    logger.debug("Gmail: письмо удалено до установки метки MC; локальная копия сохранена; ID=$messageId")
+                    null
+                }
+            }
+
             var accepted = 0
             var chats = repo.chats().toMutableList()
 
             for (mail in incoming) {
-                if (repo.isProcessed(mail.id)) continue
+                if (repo.isProcessed(mail.id)) {
+                    repo.removePendingHistoryIds(listOf(mail.id))
+                    continue
+                }
                 val verification = McProtocol.verifyDetailed(mail, repo.myEmail())
                 verification.diagnostics.forEach { logger.debug(it) }
                 val parsed = verification.parsed
                 if (parsed == null) {
-                    if (mail.subject == "[MC] Message") {
-                        logger.error("Фоновая проверка отклонила сообщение MC. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                    if (McProtocol.isMcCandidate(mail)) {
+                        val reason = verification.reason ?: "Сообщение MC не прошло проверку"
+                        val diagnostic = buildList {
+                            add("Gmail ID: ${mail.id}")
+                            add("MIME: ${mail.mimeTypes.joinToString(",")}")
+                            add("Количество заголовков: ${mail.headers.size}")
+                            add("Размер тела письма: ${mail.body.toByteArray(Charsets.UTF_8).size} байт")
+                            addAll(verification.diagnostics)
+                        }.joinToString("\n")
+                        repo.recordRejectedIncoming(
+                            McProtocol.senderAddress(mail), mail.id, verification.errorCode, reason, diagnostic
+                        )
+                        chats = repo.chats().toMutableList()
+                        logger.error("Фоновое сообщение MC отклонено и помещено в карантин. Gmail ID: ${mail.id}; код: ${verification.errorCode}; причина: $reason")
+                        continue
                     }
+                    repo.markProcessed(mail.id)
+                    repo.removePendingHistoryIds(listOf(mail.id))
                     continue
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
-                if (mail.spam) {
-                    withContext(Dispatchers.IO) { gmail.moveOutOfSpam(token, mail.id) }
-                }
-
                 val message = McMessage(
                     id = parsed.messageId,
                     chatId = parsed.chatId,
@@ -96,17 +178,22 @@ class McSyncWorker(
                 val existingIndex = if (index >= 0) chats[index].messages.indexOfFirst { it.id == parsed.messageId } else -1
                 if (existingIndex >= 0) {
                     val existing = chats[index].messages[existingIndex]
-                    if (parsed.messageVersion > existing.version) {
-                        val updatedMessages = chats[index].messages.toMutableList()
-                        updatedMessages[existingIndex] = existing.copy(
-                            text = if (parsed.messageType == "delete") "" else parsed.text,
-                            timestamp = if (parsed.messageType == "edit") System.currentTimeMillis() / 1000L else existing.timestamp,
-                            version = parsed.messageVersion,
-                            sequence = parsed.sequence,
-                            deleted = parsed.messageType == "delete"
-                        )
-                        chats[index] = chats[index].copy(messages = repo.orderedMessages(updatedMessages))
+                    if (parsed.messageVersion <= existing.version) {
+                        repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
+                        labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
+                        repo.markProcessed(mail.id)
+                        repo.removePendingHistoryIds(listOf(mail.id))
+                        continue
                     }
+                    val updatedMessages = chats[index].messages.toMutableList()
+                    updatedMessages[existingIndex] = existing.copy(
+                        text = if (parsed.messageType == "delete") "" else parsed.text,
+                        timestamp = if (parsed.messageType == "edit") System.currentTimeMillis() / 1000L else existing.timestamp,
+                        version = parsed.messageVersion,
+                        sequence = parsed.sequence,
+                        deleted = parsed.messageType == "delete"
+                    )
+                    chats[index] = chats[index].copy(messages = repo.orderedMessages(updatedMessages))
                 } else if (index >= 0) {
                     chats[index] = chats[index].copy(
                         title = if (!chats[index].nameManuallySet && mail.senderName.isNotBlank()) mail.senderName else chats[index].title,
@@ -117,12 +204,23 @@ class McSyncWorker(
                     chats.add(McChat(parsed.sender, title = mail.senderName.ifBlank { parsed.sender }, messages = listOf(message), senderName = mail.senderName.takeIf { it.isNotBlank() }))
                 }
                 repo.save(chats)
+                repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
+                labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
                 repo.markProcessed(mail.id)
+                repo.removePendingHistoryIds(listOf(mail.id))
                 accepted++
             }
 
+            val unresolvedHistoryIds = GmailHistorySyncPolicy.unresolvedIds(
+                repo.pendingHistoryIds(), repo.processedIds()
+            )
+            if (unresolvedHistoryIds.isNotEmpty()) {
+                logger.error("Gmail History: cursor не продвигается; необработанные ID=${unresolvedHistoryIds.size}; примеры=${unresolvedHistoryIds.take(5).joinToString()}")
+                throw IllegalStateException("Остались необработанные Gmail ID: ${unresolvedHistoryIds.size}; History cursor не продвинут")
+            }
+            if (nextHistoryId.isNotBlank()) repo.setHistoryId(nextHistoryId)
             if (accepted > 0) showIncomingNotification(accepted)
-            logger.info("Фоновая проверка завершена. Новых сообщений: $accepted; получение выполнено одним batch-запросом содержимого")
+            logger.info("Фоновая проверка завершена. Новых сообщений: $accepted; History cursor сохранён")
             Result.success()
         } catch (e: Exception) {
             logger.error("Ошибка фоновой проверки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")

@@ -23,8 +23,38 @@ object McProtocol {
     data class Verification(
         val parsed: Parsed?,
         val reason: String?,
-        val diagnostics: List<String> = emptyList()
+        val diagnostics: List<String> = emptyList(),
+        val errorCode: String = "MC_MESSAGE_REJECTED",
+        val errorField: String? = null
     )
+
+    private class InvalidBase64FieldException(val fieldName: String) :
+        IllegalArgumentException("Некорректное Base64 поле $fieldName")
+
+    internal fun normalizeBase64Transport(value: String, fieldName: String, urlSafe: Boolean): String {
+        val compact = buildString(value.length) {
+            value.forEach { ch ->
+                if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') append(ch)
+            }
+        }
+        val alphabet = if (urlSafe) Regex("^[A-Za-z0-9_-]+={0,2}$")
+            else Regex("^[A-Za-z0-9+/]+={0,2}$")
+        val paddingIndex = compact.indexOf('=')
+        if (!alphabet.matches(compact) || compact.length % 4 == 1 ||
+            (paddingIndex >= 0 && compact.length % 4 != 0)
+        ) throw InvalidBase64FieldException(fieldName)
+        try {
+            if (urlSafe) Base64.getUrlDecoder().decode(compact)
+            else Base64.getDecoder().decode(compact)
+        } catch (_: IllegalArgumentException) {
+            throw InvalidBase64FieldException(fieldName)
+        }
+        return compact
+    }
+
+    fun senderAddress(mail: GmailTransport.RemoteMessage): String? =
+        Regex("[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}", RegexOption.IGNORE_CASE)
+            .find(mail.from)?.value?.lowercase(Locale.ROOT)
 
     data class CanonicalInput(
         val messageId: String, val chatId: String, val senderId: String,
@@ -78,6 +108,12 @@ object McProtocol {
         "x-mc-sequence", "x-mc-key-id", "x-mc-public-key",
         "x-mc-signature-algorithm", "x-mc-signature"
     )
+
+    fun isMcCandidate(mail: GmailTransport.RemoteMessage): Boolean =
+        mail.subject.equals("[MC] Message", ignoreCase = true) ||
+            mail.headers.keys.any { it.startsWith("x-mc-", ignoreCase = true) } ||
+            mail.body.contains("-----BEGIN MC DATA-----") ||
+            mail.body.contains("X-MC-Message-ID:", ignoreCase = true)
 
     fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? {
         return verifyDetailed(mail, ownEmail).parsed
@@ -134,21 +170,28 @@ object McProtocol {
             val finish = "-----END MC DATA-----"
             val start = mail.body.indexOf(begin)
             val end = mail.body.indexOf(finish)
+            val hasBodyBlock = start >= 0 && end > start
+            val bodyValues = if (hasBodyBlock) {
+                parseBlock(mail.body.substring(start + begin.length, end))
+            } else emptyMap()
 
-            if (start < 0 || end <= start) {
-                return Verification(null, "В теле письма не найдены маркеры MC DATA")
-            }
-
-            val block = mail.body.substring(start + begin.length, end)
-            val values = parseBlock(block)
-
-            // Заголовки Gmail — резервный источник недостающих значений.
+            // RFC/MIME headers are the authoritative transport for protocol data.
+            // The visible body block is optional and retained for compatibility/debugging.
+            val values = linkedMapOf<String, String>()
             for ((key, value) in mail.headers) {
-                val normalized = key.lowercase()
-                if (values[normalized].isNullOrBlank() && value.isNotBlank()) {
-                    values[normalized] = value.trim()
+                if (key.lowercase().startsWith("x-mc-") && value.isNotBlank()) {
+                    values[key.lowercase()] = value.trim()
                 }
             }
+            // Legacy messages may carry X-MC-Text-Base64 only inside the visible body block.
+            for ((key, value) in bodyValues) {
+                val headerValue = values[key]
+                if (headerValue != null && headerValue != value) {
+                    return Verification(null, "Значение $key в теле не совпадает с MIME-заголовком")
+                }
+                if (headerValue == null) values[key] = value
+            }
+            if (values.isEmpty()) return Verification(null, "Не найдены служебные данные MC в MIME-заголовках или теле письма")
 
             for (key in required) {
                 if (values[key].isNullOrBlank()) {
@@ -180,35 +223,42 @@ object McProtocol {
                 return Verification(null, "Получатель не совпадает с аккаунтом MC")
             }
 
+            // MIME folding is transport-only whitespace. Use the unfolded encoded
+            // value both for key decoding and for the canonical public-key field.
+            val normalizedPublicKey = normalizeBase64Transport(
+                values.getValue("x-mc-public-key"), "x-mc-public-key", false
+            )
             val publicKey = KeyFactory.getInstance(
                 "Ed25519", McCrypto.provider
             ).generatePublic(
-                X509EncodedKeySpec(
-                    Base64.getDecoder().decode(values.getValue("x-mc-public-key"))
-                )
+                X509EncodedKeySpec(Base64.getDecoder().decode(normalizedPublicKey))
             )
 
-            // New format: message text precedes MC DATA. Legacy format: text follows END marker.
-            // Remove only the single line break added as the separator before/after the technical block.
-            val textBeforeBlock = mail.body.substring(0, start)
-            val textAfterBlock = mail.body.substring(end + finish.length)
-            val rawText = if (textBeforeBlock.isNotEmpty()) {
-                textBeforeBlock.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
-            } else {
-                when {
-                    textAfterBlock.startsWith("\r\n\r\n") -> textAfterBlock.substring(4)
-                    textAfterBlock.startsWith("\n\n") -> textAfterBlock.substring(2)
-                    textAfterBlock.startsWith("\r\n") -> textAfterBlock.substring(2)
-                    textAfterBlock.startsWith("\n") -> textAfterBlock.substring(1)
-                    else -> textAfterBlock
+            // New messages always put user text first. If the optional block exists, strip it;
+            // otherwise the complete MIME body is the visible message text. Legacy messages
+            // with text after END MC DATA remain supported.
+            val rawText = if (hasBodyBlock) {
+                val textBeforeBlock = mail.body.substring(0, start)
+                val textAfterBlock = mail.body.substring(end + finish.length)
+                if (textBeforeBlock.isNotEmpty()) {
+                    textBeforeBlock.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
+                } else {
+                    when {
+                        textAfterBlock.startsWith("\r\n\r\n") -> textAfterBlock.substring(4)
+                        textAfterBlock.startsWith("\n\n") -> textAfterBlock.substring(2)
+                        textAfterBlock.startsWith("\r\n") -> textAfterBlock.substring(2)
+                        textAfterBlock.startsWith("\n") -> textAfterBlock.substring(1)
+                        else -> textAfterBlock
+                    }
                 }
-            }
+            } else mail.body.removeSuffix("\r\n").removeSuffix("\n").removeSuffix("\r")
             // Protocol v3 senders include the exact UTF-8 text bytes as URL-safe Base64.
             // Prefer this signed representation over the MIME display body, which Gmail
             // is allowed to normalize (line endings, transfer encoding, etc.).
             val text = values["x-mc-text-base64"]?.takeIf { it.isNotBlank() }?.let { encoded ->
                 require(encoded.length <= 2_800_000) { "Подписанный текст слишком длинный" }
-                normalizeText(String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8))
+                val normalized = normalizeBase64Transport(encoded, "x-mc-text-base64", true)
+                normalizeText(String(Base64.getUrlDecoder().decode(normalized), Charsets.UTF_8))
             } ?: normalizeText(rawText)
 
             val messageId = values.getValue("x-mc-message-id")
@@ -231,7 +281,8 @@ object McProtocol {
                 val encoded = values[key].orEmpty()
                 if (encoded.isBlank()) return ""
                 if (encoded.length > maxBytes * 2) throw IllegalArgumentException("Профильное поле слишком длинное")
-                val decoded = String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+                val normalized = normalizeBase64Transport(encoded, key, true)
+                val decoded = String(Base64.getUrlDecoder().decode(normalized), Charsets.UTF_8)
                 if (decoded.toByteArray(Charsets.UTF_8).size > maxBytes) throw IllegalArgumentException("Профильное поле слишком длинное")
                 return decoded
             }
@@ -243,15 +294,20 @@ object McProtocol {
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
                 values.getValue("x-mc-version"), messageType,
                 timestamp.toString(), values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
+                values.getValue("x-mc-key-id"), normalizedPublicKey, text,
                 values["x-mc-message-version"] ?: "1", protocol in setOf("2", "3"), protocol,
                 senderName, senderAvatar
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
-            val signature = values.getValue("x-mc-signature")
+            val signature = normalizeBase64Transport(
+                values.getValue("x-mc-signature"), "x-mc-signature", false
+            )
             val diagnostics = signatureDiagnostics("receiver", input, signature)
             if (!McCrypto.verify(publicKey, canonicalBytes, signature)) {
-                return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
+                return Verification(
+                    null, "Криптографическая подпись не прошла проверку", diagnostics,
+                    "MC_SIGNATURE_INVALID", "x-mc-signature"
+                )
             }
 
             val sequence = values.getValue("x-mc-sequence").toLong()
@@ -262,7 +318,22 @@ object McProtocol {
             if (messageType != "text" && messageVersion < 2L) return Verification(null, "Некорректная версия изменения сообщения")
             return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType, senderName, senderAvatar), null, diagnostics)
         } catch (e: Exception) {
-            return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
+            val stack = e.stackTrace.take(12).joinToString(" <- ") {
+                "${it.className}.${it.methodName}:${it.lineNumber}"
+            }
+            val invalidBase64 = e as? InvalidBase64FieldException
+            val errorCode = if (invalidBase64 != null) "MC_BASE64_INVALID" else "MC_MESSAGE_MALFORMED"
+            val errorField = invalidBase64?.fieldName
+            // Never copy exception messages that might echo attacker-controlled header values.
+            val safeDetail = if (errorField != null) "Некорректное Base64 поле $errorField" else "Подробности исключения скрыты"
+            val diagnostic = "MC_VERIFY_EXCEPTION code=$errorCode field=${errorField ?: "unknown"} type=${e.javaClass.simpleName} detail=$safeDetail stack=$stack"
+            return Verification(
+                null,
+                "Ошибка проверки: " + (errorField?.let { "некорректное поле $it" } ?: e.javaClass.simpleName),
+                listOf(diagnostic),
+                errorCode,
+                errorField
+            )
         }
     }
 

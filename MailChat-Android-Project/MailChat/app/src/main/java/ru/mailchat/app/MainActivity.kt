@@ -266,9 +266,12 @@ class MainActivity : ComponentActivity() {
                 }
                 accountEmail = profile.email
                 repo.setEmail(profile.email)
+                val labelId = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.ensureMcLabel(fresh) } }
+                repo.setMcLabelId(labelId)
                 authResolving = false
                 if (repo.baseline() == 0L) {
                     repo.setBaseline(System.currentTimeMillis() / 1000)
+                    repo.setHistoryId(profile.historyId)
                     logger.add("Первичная точка синхронизации сохранена; старые письма не импортируются")
                 }
                 logger.add("Gmail подключён: ${profile.email}")
@@ -288,21 +291,38 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 logger.add("Начата отправка события $messageType получателю: $to")
-                val id = gmailRequest { fresh ->
+                val account = accountEmail.ifBlank { repo.myEmail() }
+                val sent = gmailRequest { fresh ->
                     withContext(Dispatchers.IO) {
-                    val pair = identity.keyPair()
-                    gmail.send(
-                        fresh, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
-                        message.chatId, identity.publicKey(),
-                        messageId = message.id, sequence = message.sequence,
-                        messageVersion = message.version, messageType = messageType,
-                        messageTimestamp = message.timestamp,
-                        senderName = repo.ownProfileName(),
-                        senderAvatarUrl = repo.ownProfileAvatar()
-                    ) { bytes -> McCrypto.sign(pair, bytes) }
+                        val pair = identity.keyPair()
+                        gmail.send(
+                            fresh, account, to, message.text,
+                            message.chatId, identity.publicKey(),
+                            messageId = message.id, sequence = message.sequence,
+                            messageVersion = message.version, messageType = messageType,
+                            messageTimestamp = message.timestamp,
+                            senderName = repo.ownProfileName(),
+                            senderAvatarUrl = repo.ownProfileAvatar(),
+                            threadId = repo.gmailThreadId(account, to),
+                            previousRfcMessageId = repo.gmailLastMessageId(account, to),
+                            showTechnicalInfo = repo.showTechnicalInfoEnabled()
+                        ) { bytes -> McCrypto.sign(pair, bytes) }
                     }
                 }
-                logger.add("Событие MC отправлено в Gmail: $id; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
+                // Persist the successful send before the independent label request. A label failure
+                // must never cause gmailRequest to resend the already delivered message.
+                repo.saveGmailThread(account, to, sent.threadId, sent.rfcMessageId)
+                repo.markProcessed(sent.id)
+                runCatching {
+                    gmailRequest { fresh ->
+                        withContext(Dispatchers.IO) {
+                            val labelId = repo.mcLabelId().ifBlank { gmail.ensureMcLabel(fresh).also(repo::setMcLabelId) }
+                            gmail.labelSent(fresh, sent.id, labelId)
+                        }
+                    }
+                }.onSuccess(repo::setMcLabelId)
+                    .onFailure { logger.error("Сообщение отправлено, но не удалось добавить метку MC: ${it.javaClass.simpleName}") }
+                logger.add("Событие MC отправлено в Gmail: ${sent.id}; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
                 done(null)
             } catch (e: Exception) {
                 logger.error("Ошибка отправки: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
@@ -311,7 +331,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val syncQueue = mutableListOf<Pair<String, (String) -> Unit>>()
+    private val syncQueue = mutableListOf<Pair<String, MutableList<(String) -> Unit>>>()
     private var syncQueueDraining = false
 
     private fun syncNow(source: String = "ручная", done: (String) -> Unit = {}) {
@@ -319,16 +339,21 @@ class MainActivity : ComponentActivity() {
             done("Нет подключения Gmail")
             return
         }
-        syncQueue.add(source to done)
-        if (syncQueueDraining) return
-
+        if (syncQueueDraining) {
+            if (syncQueue.isEmpty()) syncQueue.add(source to mutableListOf(done))
+            else syncQueue[0].second.add(done)
+            return
+        }
+        syncQueue.add(source to mutableListOf(done))
         syncQueueDraining = true
         syncInProgress = true
         lifecycleScope.launch {
             try {
                 while (syncQueue.isNotEmpty()) {
                     val request = syncQueue.removeAt(0)
-                    performSync(request.first, request.second)
+                    var result = "Проверка завершена"
+                    performSync(request.first) { result = it }
+                    request.second.forEach { callback -> runCatching { callback(result) } }
                 }
             } finally {
                 syncQueueDraining = false
@@ -344,21 +369,86 @@ class MainActivity : ComponentActivity() {
             if (token == null) { done("Нет подключения Gmail"); return }
         }
         val since = repo.baseline().coerceAtLeast(1L)
-        logger.info("Начата $source проверка почты. Точка синхронизации: $since")
-
+        logger.info("Начата $source проверка почты. Точка синхронизации: " + repo.historyId().ifBlank { since.toString() })
+        var nextHistoryId = ""
         var result = "Проверка завершена"
             try {
-                logger.add("Запрос списка входящих сообщений Gmail")
-                val incoming = gmailRequest { fresh ->
-                    withContext(Dispatchers.IO) { gmail.list(fresh, "after:$since {in:inbox in:spam}", 50) }
+                val labelId = repo.mcLabelId().ifBlank {
+                    gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.ensureMcLabel(fresh) } }.also(repo::setMcLabelId)
                 }
-                logger.add("Gmail вернул сообщений: ${incoming.size}")
+                logger.add("Получение изменений Gmail через History API")
+                val incoming = gmailRequest { fresh ->
+                    withContext(Dispatchers.IO) {
+                        val completedPending = repo.pendingHistoryIds().filter(repo::isProcessed)
+                        repo.removePendingHistoryIds(completedPending)
+                        val cursor = repo.historyId()
+                        if (cursor.isNotBlank()) {
+                            try {
+                                val changes = gmail.history(fresh, cursor)
+                                nextHistoryId = changes.historyId
+                                val plan = GmailHistorySyncPolicy.plan(changes.messageIds, changes.deletedMessageIds)
+                                plan.deletedIds.forEach { id ->
+                                    logger.debug("Gmail History: подтверждено удаление письма; Gmail ID=$id")
+                                    repo.markProcessed(id)
+                                    repo.removePendingHistoryIds(listOf(id))
+                                }
+                                repo.addPendingHistoryIds(plan.idsToFetch)
+                                val pendingIds = repo.pendingHistoryIds()
+                                    .filterNot(repo::isProcessed)
+                                    .filter(repo::isPendingHistoryRetryDue)
+                                val fetched = gmail.getMessages(fresh, pendingIds)
+                                val fetchedIds = fetched.map { it.id }.toSet()
+                                val disappeared = GmailHistorySyncPolicy.confirmedNotFoundIds(pendingIds, fetchedIds)
+                                disappeared.forEach { id ->
+                                    logger.debug("Gmail History: Gmail подтвердил отсутствие письма (HTTP 404); ID=$id")
+                                    repo.markProcessed(id)
+                                }
+                                if (disappeared.isNotEmpty()) repo.removePendingHistoryIds(disappeared)
+                                logger.debug("Gmail History: запрошено ID=${pendingIds.size}; получено=${fetchedIds.size}; подтверждённо удалено=${disappeared.size}")
+                                val trashedIds = fetched.filter { it.trashed }.map { it.id }
+                                trashedIds.forEach { id ->
+                                    logger.debug("Gmail: письмо уже находится в корзине TRASH; импорт пропущен; ID=$id")
+                                    repo.markProcessed(id)
+                                }
+                                if (trashedIds.isNotEmpty()) repo.removePendingHistoryIds(trashedIds)
+                                fetched.filterNot { it.trashed }
+                            } catch (e: GmailTransport.GmailApiException) {
+                                if (e.statusCode != 404) throw e
+                                logger.error("Gmail historyId устарел; выполняется восстановительная синхронизация")
+                                nextHistoryId = gmail.profile(fresh).historyId
+                                val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                                repo.addPendingHistoryIds(recovered.map { it.id })
+                                recovered
+                            }
+                        } else {
+                            logger.info("Для этого аккаунта ещё нет History cursor; выполняется первичная выборка после контрольной даты")
+                            nextHistoryId = gmail.profile(fresh).historyId
+                            val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            repo.addPendingHistoryIds(recovered.map { it.id })
+                            recovered
+                        }
+                    }
+                }
+                suspend fun labelIncomingOrAcceptDeletion(messageId: String): String? {
+                    return try {
+                        withContext(Dispatchers.IO) {
+                            gmailRequest { fresh -> gmail.labelIncoming(fresh, messageId, labelId) }
+                        }
+                    } catch (e: GmailTransport.GmailApiException) {
+                        if (!GmailHistorySyncPolicy.isConfirmedDeletionStatus(e.statusCode)) throw e
+                        logger.debug("Gmail: письмо удалено до установки метки MC; локальная копия сохранена; ID=$messageId")
+                        null
+                    }
+                }
+
+                logger.add("Gmail: получено новых сообщений для проверки: ${incoming.size}")
 
                 var accepted = 0
                 var skipped = 0
 
                 for (mail in incoming) {
                     if (repo.isProcessed(mail.id)) {
+                        repo.removePendingHistoryIds(listOf(mail.id))
                         skipped++
                         continue
                     }
@@ -366,10 +456,14 @@ class MainActivity : ComponentActivity() {
                     logger.debug("Обработка письма Gmail ID: ${mail.id}")
 
                     val mcBlock = mail.body.substringAfter("-----BEGIN MC DATA-----", "").substringBefore("-----END MC DATA-----")
-                    logger.debug("MC DATA extracted: markers=${mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")}, signature=${mcBlock.contains("X-MC-Signature:", ignoreCase = true)}")
-                    val signatureLines = mcBlock.lineSequence()
-                        .filter { it.contains("signature", ignoreCase = true) }
-                        .toList()
+                    val bodyMarkers = mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")
+                    val bodySignature = mcBlock.contains("X-MC-Signature:", ignoreCase = true)
+                    val headerSignature = mail.headers.keys.any { it.equals("x-mc-signature", true) }
+                    logger.debug("MC DATA extracted: bodyMarkers=$bodyMarkers, bodySignature=$bodySignature, mimeHeaderSignature=$headerSignature, signaturePresent=${bodySignature || headerSignature}")
+                    val signatureLines = (mcBlock.lineSequence()
+                        .filter { it.contains("signature", ignoreCase = true) }.toList() +
+                        mail.headers.filterKeys { it.contains("signature", ignoreCase = true) }
+                            .map { (key, value) -> "$key: length=${value.length}" })
                     logger.debug("MC signature diagnostics: " + signatureLines.map { line ->
                         "length=${line.length}, colon=${line.indexOf(':')}, chars=" +
                             line.takeWhile { it != ':' }.map { it.code.toString(16) }.joinToString(",")
@@ -382,16 +476,29 @@ class MainActivity : ComponentActivity() {
                     val parsed = verification.parsed
 
                     if (parsed == null) {
-                        if (mail.subject == "[MC] Message") {
-                            logger.error("Сообщение MC отклонено. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                        if (McProtocol.isMcCandidate(mail)) {
+                            val reason = verification.reason ?: "Сообщение MC не прошло проверку"
+                            val diagnostic = buildList {
+                                add("Gmail ID: ${mail.id}")
+                                add("MIME: ${mail.mimeTypes.joinToString(",")}")
+                                add("Количество заголовков: ${mail.headers.size}")
+                                add("Размер тела письма: ${mail.body.toByteArray(Charsets.UTF_8).size} байт")
+                                addAll(verification.diagnostics)
+                            }.joinToString("\n")
+                            repo.recordRejectedIncoming(
+                                McProtocol.senderAddress(mail), mail.id, verification.errorCode, reason, diagnostic
+                            )
+                            logger.error("Сообщение MC отклонено и помещено в карантин. Gmail ID: ${mail.id}; код: ${verification.errorCode}; причина: $reason")
+                            skipped++
+                            continue
                         }
+                        // A normal non-MC email is a terminal skip, not a failed MC event.
+                        repo.markProcessed(mail.id)
+                        repo.removePendingHistoryIds(listOf(mail.id))
+                        skipped++
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
-                    if (mail.spam) {
-                        gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.moveOutOfSpam(fresh, mail.id) } }
-                        logger.info("Подтверждённое сообщение MC возвращено из спама")
-                    }
 
                     val current = repo.chats().toMutableList()
                     val index = current.indexOfFirst { it.email.equals(parsed.sender, true) }
@@ -422,7 +529,10 @@ class MainActivity : ComponentActivity() {
                             )
                             current[index] = current[index].copy(messages = repo.orderedMessages(updatedMessages))
                         } else {
+                            repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, parsed.sender, mail.threadId, mail.headers["message-id"])
+                            labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
                             repo.markProcessed(mail.id)
+                            repo.removePendingHistoryIds(listOf(mail.id))
                             skipped++
                             continue
                         }
@@ -445,13 +555,24 @@ class MainActivity : ComponentActivity() {
                     }
 
                     repo.save(current)
+                    repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, parsed.sender, mail.threadId, mail.headers["message-id"])
+                    labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
                     repo.markProcessed(mail.id)
+                    repo.removePendingHistoryIds(listOf(mail.id))
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
                 }
 
+                val unresolvedHistoryIds = GmailHistorySyncPolicy.unresolvedIds(
+                    repo.pendingHistoryIds(), repo.processedIds()
+                )
+                if (unresolvedHistoryIds.isNotEmpty()) {
+                    logger.error("Gmail History: cursor не продвигается; необработанные ID=${unresolvedHistoryIds.size}; примеры=${unresolvedHistoryIds.take(5).joinToString()}")
+                    throw IllegalStateException("Остались необработанные Gmail ID: ${unresolvedHistoryIds.size}; History cursor сохранён без продвижения")
+                }
+                if (nextHistoryId.isNotBlank()) repo.setHistoryId(nextHistoryId)
                 chats = repo.chats()
-                logger.info("Синхронизация завершена пакетно: 1 запрос списка + 1 batch-запрос содержимого, независимо от числа чатов")
+                logger.info("Синхронизация завершена. History cursor сохранён; обработка повторных Gmail ID исключена")
                 if (accepted > 0) playIncomingSound()
                 logger.add("Проверка Gmail завершена. Получено: $accepted; пропущено: $skipped; всего проверено: ${incoming.size}")
                 result = "Проверка завершена. Новых сообщений: $accepted"
@@ -481,6 +602,7 @@ class MainActivity : ComponentActivity() {
         var minimizedSeconds by remember { mutableStateOf(repo.minimizedIntervalSeconds().toString()) }
         var closedSeconds by remember { mutableStateOf(repo.closedIntervalSeconds().toString()) }
         var diagnosticClick by remember { mutableStateOf(repo.diagnosticClickEnabled()) }
+        var showTechnicalInfo by remember { mutableStateOf(repo.showTechnicalInfoEnabled()) }
         val pendingDeleteDeadlines = remember { mutableStateMapOf<String, Long>().apply { putAll(repo.pendingChatDeletions()) } }
         var deleteCountdownNow by remember { mutableLongStateOf(System.currentTimeMillis()) }
         val logListState = rememberLazyListState()
@@ -516,7 +638,8 @@ class MainActivity : ComponentActivity() {
                 openSeconds.toIntOrNull() ?: repo.openIntervalSeconds(),
                 minimizedSeconds.toIntOrNull() ?: repo.minimizedIntervalSeconds(),
                 closedSeconds.toIntOrNull() ?: repo.closedIntervalSeconds(),
-                diagnosticClick
+                diagnosticClick,
+                showTechnicalInfo
             )
             McSyncScheduler.schedule(this@MainActivity, repo.closedIntervalSeconds())
             restartAutoSyncLoop()
@@ -686,6 +809,13 @@ class MainActivity : ComponentActivity() {
                         }
                         if (token != null || auth.isConnected()) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
                         Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        HorizontalDivider()
+                        Text("Отправка сообщений", fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = showTechnicalInfo, onCheckedChange = { showTechnicalInfo = it })
+                            Text("Показывать техническую информацию в письме", fontSize = 14.sp)
+                        }
+                        Text("Если флажок снят, в теле письма будет только текст сообщения. Служебные данные MC всё равно передаются в MIME-заголовках и используются для проверки и синхронизации.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Логирование", fontWeight = FontWeight.Bold)
                         Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
@@ -1092,11 +1222,11 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             modifier = Modifier
-                                .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
+                                .then(if (message.deleted || message.isProcessingError) Modifier.fillMaxWidth(0.88f) else Modifier.widthIn(max = 320.dp))
                                 .onGloballyPositioned { messageCoordinates = it }
                                 .pointerInput(message.id, message.deleted, message.incoming) {
                                     detectTapGestures(onLongPress = { localPoint ->
-                                        val canOpen = !message.deleted && (message.incoming ||
+                                        val canOpen = !message.deleted && !message.isProcessingError && (message.incoming ||
                                             message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED))
                                         if (canOpen) {
                                             actionMenuPosition = messageCoordinates?.localToWindow(localPoint)?.round() ?: IntOffset.Zero
@@ -1105,14 +1235,31 @@ class MainActivity : ComponentActivity() {
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
-                            color = if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            color = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
                                 bottomEnd = if (message.incoming) 18.dp else 5.dp
                             )
                         ) {
-                            if (message.deleted) {
+                            if (message.isProcessingError) {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                    Text("⚠ Не удалось обработать сообщение", color = Color(0xFFFFC56B), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Spacer(Modifier.height(5.dp))
+                                    Text(message.errorReason.ifBlank { message.text }, color = Color.White, fontSize = 13.sp, lineHeight = 18.sp)
+                                    Spacer(Modifier.height(5.dp))
+                                    Text("Код: ${message.errorCode}", color = Color(0xFFD8C5A8), fontSize = 11.sp)
+                                    Text("Gmail ID: ${message.gmailId}", color = Color(0xFFD8C5A8), fontSize = 10.sp)
+                                    TextButton(
+                                        onClick = { clipboardManager.setText(AnnotatedString(message.supportDiagnosticText())) },
+                                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Скопировать для техподдержки", fontSize = 12.sp)
+                                    }
+                                }
+                            } else if (message.deleted) {
                                 Text(
                                     "delete messages",
                                     modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
