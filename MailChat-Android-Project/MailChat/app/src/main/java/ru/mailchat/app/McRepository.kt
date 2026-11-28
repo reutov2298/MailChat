@@ -38,9 +38,25 @@ class McRepository(context: Context) {
     }
 
     fun baseline(): Long = prefs.getLong("baseline", 0L)
-    fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).apply() }
+    fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).commit() }
+    fun historyId(): String = prefs.getString("gmail_history_id", "").orEmpty()
+    fun setHistoryId(value: String) { if (value.isNotBlank()) prefs.edit().putString("gmail_history_id", value).commit() }
+    fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
+    fun setMcLabelId(value: String) { if (value.isNotBlank()) prefs.edit().putString("gmail_mc_label_id", value).commit() }
+    private fun gmailThreadKey(account: String, chat: String, suffix: String): String =
+        "gmail_" + suffix + ":" + account.trim().lowercase() + ":" + chat.trim().lowercase()
+    fun gmailThreadId(account: String, chat: String): String =
+        prefs.getString(gmailThreadKey(account, chat, "thread"), "").orEmpty()
+    fun gmailLastMessageId(account: String, chat: String): String =
+        prefs.getString(gmailThreadKey(account, chat, "message"), "").orEmpty()
+    fun saveGmailThread(account: String, chat: String, threadId: String?, rfcMessageId: String?) {
+        val edit = prefs.edit()
+        if (!threadId.isNullOrBlank()) edit.putString(gmailThreadKey(account, chat, "thread"), threadId)
+        if (!rfcMessageId.isNullOrBlank()) edit.putString(gmailThreadKey(account, chat, "message"), rfcMessageId)
+        edit.commit()
+    }
     fun myEmail(): String = prefs.getString("email", "").orEmpty()
-    fun setEmail(value: String) { prefs.edit().putString("email", value).apply() }
+    fun setEmail(value: String) { prefs.edit().putString("email", value).commit() }
     fun ownProfileName(): String = prefs.getString("own_profile_name", "").orEmpty()
     fun ownProfileAvatar(): String = prefs.getString("own_profile_avatar", "").orEmpty()
     fun setOwnProfile(name: String?, avatar: String?) {
@@ -56,12 +72,12 @@ class McRepository(context: Context) {
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
         if (prefs.getLong("sync_lock_until", 0L) > now) return@synchronized false
-        prefs.edit().putLong("sync_lock_until", now + 10 * 60 * 1000L).apply()
+        prefs.edit().putLong("sync_lock_until", now + 10 * 60 * 1000L).commit()
         true
     }
 
     fun releaseSyncLock() = synchronized(syncLock) {
-        prefs.edit().putLong("sync_lock_until", 0L).apply()
+        prefs.edit().putLong("sync_lock_until", 0L).commit()
     }
 
     fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean) {
