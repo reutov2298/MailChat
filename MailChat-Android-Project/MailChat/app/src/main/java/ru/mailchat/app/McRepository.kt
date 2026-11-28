@@ -76,7 +76,9 @@ class McRepository(context: Context) {
         val key = mailboxKey("pending_history_ids")
         val pending = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
         if (pending.addAll(ids.filter(String::isNotBlank))) {
-            prefs.edit().putStringSet(key, pending).commit()
+            check(prefs.edit().putStringSet(key, pending).commit()) {
+                "Не удалось сохранить очередь Gmail History"
+            }
         }
     }
 
