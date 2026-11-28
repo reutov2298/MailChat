@@ -12,8 +12,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class GmailTransport {
-    class GmailApiException(val statusCode: Int, val responseBody: String) :
-        IllegalStateException("Gmail API $statusCode: ${responseBody.take(300)}")
+    class GmailApiException(
+        val statusCode: Int,
+        val responseBody: String,
+        val retryAfterSeconds: Long? = null
+    ) : IllegalStateException("Gmail API $statusCode: ${responseBody.take(300)}")
     companion object {
         // Serialize Gmail API calls across all transport instances and keep a
         // minimum gap between request starts to prevent bursts from sync/send/worker.
@@ -52,7 +55,7 @@ class GmailTransport {
                     }
                     http.newCall(builder.build()).execute().use { response ->
                         val text = response.body?.string().orEmpty()
-                        if (!response.isSuccessful) throw GmailApiException(response.code, text)
+                        if (!response.isSuccessful) throw GmailApiException(response.code, text, response.header("Retry-After")?.toLongOrNull())
                         text
                     }
                 }
@@ -62,7 +65,7 @@ class GmailTransport {
                 val retryable = e.statusCode == 429 ||
                     (e.statusCode == 403 && listOf("ratelimitexceeded", "userratelimitexceeded", "quotaexceeded", "too many concurrent").any(reason::contains))
                 if (!retryable || attempt == 3) throw e
-                val retryAfter = Regex("(?i)retry-after\\s*[:=]\\s*(\\d+)").find(e.responseBody)?.groupValues?.get(1)?.toLongOrNull()
+                val retryAfter = e.retryAfterSeconds ?: Regex("(?i)retry-after\\s*[:=]\\s*(\\d+)").find(e.responseBody)?.groupValues?.get(1)?.toLongOrNull()
                 val backoff = (retryAfter?.times(1000L) ?: (1000L shl attempt)).coerceAtMost(30_000L)
                 val jitter = kotlin.random.Random.nextLong(100L, 500L)
                 onDiagnostic?.invoke("Gmail API HTTP " + e.statusCode + "; повтор через " + ((backoff + jitter) / 1000.0) + " с")
@@ -245,7 +248,8 @@ class GmailTransport {
                             return@forEach
                         }
                         if (status != null && status !in 200..299) {
-                            throw GmailApiException(status, part.substring(httpStart).take(300))
+                            val retryAfter = Regex("(?im)^Retry-After:\\s*(\\d+)").find(part)?.groupValues?.get(1)?.toLongOrNull()
+                            throw GmailApiException(status, part.substring(httpStart).take(300), retryAfter)
                         }
                         val jsonStart = part.indexOf("{", httpStart)
                         val jsonEnd = part.lastIndexOf("}")
