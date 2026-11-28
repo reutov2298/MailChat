@@ -811,67 +811,40 @@ class MainActivity : ComponentActivity() {
                         Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Прозрачность даты, времени и надписи «изменено»", fontWeight = FontWeight.SemiBold)
-                        Text("$chatMetadataAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Slider(
-                            value = chatMetadataAlphaPercent.toFloat(),
-                            onValueChange = {
-                                chatMetadataAlphaPercent = it.roundToInt().coerceIn(0, 100)
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
-                            },
-                            valueRange = 0f..100f,
-                            steps = 99
-                        )
-                        HorizontalDivider()
-                        Text("Размер шрифта даты, времени и надписи «изменено»", fontWeight = FontWeight.SemiBold)
-                        Text("$chatMetadataFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Slider(
-                            value = chatMetadataFontSizeSp.toFloat(),
-                            onValueChange = {
-                                chatMetadataFontSizeSp = ChatAppearanceSettingsPolicy.normalizeFontSizeSp(it.roundToInt())
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
-                            },
-                            valueRange = ChatAppearanceSettingsPolicy.MIN_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_FONT_SIZE_SP.toFloat(),
-                            steps = 7
-                        )
-                        HorizontalDivider()
-                        Text("Прозрачность карточки сообщения", fontWeight = FontWeight.SemiBold)
-                        Text("$chatCardAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Slider(
-                            value = chatCardAlphaPercent.toFloat(),
-                            onValueChange = {
-                                chatCardAlphaPercent = ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(it.roundToInt())
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
-                            },
-                            valueRange = 0f..100f,
-                            steps = 99
-                        )
-                        HorizontalDivider()
-                        Text("Размер шрифта текста сообщения", fontWeight = FontWeight.SemiBold)
+                        Text("Визуальное представление", fontWeight = FontWeight.Bold)
+                        Text("Размер шрифта сообщений", fontWeight = FontWeight.SemiBold)
                         Text("$chatMessageFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Slider(
-                            value = chatMessageFontSizeSp.toFloat(),
-                            onValueChange = {
-                                chatMessageFontSizeSp = ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(it.roundToInt())
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
-                            },
-                            valueRange = ChatAppearanceSettingsPolicy.MIN_MESSAGE_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_MESSAGE_FONT_SIZE_SP.toFloat(),
-                            steps = 13
-                        )
+                        Slider(value = chatMessageFontSizeSp.toFloat(), onValueChange = {
+                            chatMessageFontSizeSp = ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = ChatAppearanceSettingsPolicy.MIN_MESSAGE_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_MESSAGE_FONT_SIZE_SP.toFloat(), steps = 13)
+                        HorizontalDivider()
+                        Text("Прозрачность карточек", fontWeight = FontWeight.SemiBold)
+                        Text("$chatCardAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatCardAlphaPercent.toFloat(), onValueChange = {
+                            chatCardAlphaPercent = ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = 0f..100f, steps = 99)
+                        HorizontalDivider()
+                        Text("Размер шрифта временной метки", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatMetadataFontSizeSp.toFloat(), onValueChange = {
+                            chatMetadataFontSizeSp = ChatAppearanceSettingsPolicy.normalizeFontSizeSp(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = ChatAppearanceSettingsPolicy.MIN_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_FONT_SIZE_SP.toFloat(), steps = 7)
+                        HorizontalDivider()
+                        Text("Прозрачность временной метки", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatMetadataAlphaPercent.toFloat(), onValueChange = {
+                            chatMetadataAlphaPercent = ChatAppearanceSettingsPolicy.normalizeAlphaPercent(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = 0f..100f, steps = 99)
                         HorizontalDivider()
                         Text("Пример отображения", fontWeight = FontWeight.SemiBold)
-                        Surface(
-                            color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f),
-                            shape = RoundedCornerShape(14.dp)
-                        ) {
+                        Surface(color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f), shape = RoundedCornerShape(14.dp)) {
                             Column(Modifier.fillMaxWidth().padding(12.dp)) {
                                 Text("Пример текста сообщения", color = Color.White, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
-                                Text(
-                                    "изменено   28.11.26   09:42",
-                                    color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f),
-                                    fontSize = chatMetadataFontSizeSp.sp,
-                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-                                )
+                                Text("изменено   14:35", color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f), fontSize = chatMetadataFontSizeSp.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                             }
                         }
                         Text("Изменения применяются сразу и сохраняются автоматически.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -880,7 +853,7 @@ class MainActivity : ComponentActivity() {
                         Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp)
                     ) {
-                        Text("Настройки экранов", fontWeight = FontWeight.Bold)
+                        Text("Настройка чата", fontWeight = FontWeight.Bold)
                         OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("Настройка чата")
@@ -893,7 +866,7 @@ class MainActivity : ComponentActivity() {
                         Text("Интерфейс", fontWeight = FontWeight.Bold)
                         OutlinedButton(onClick = { screenSettings = true }, modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Настройки экранов")
+                                Text("Настройка чата")
                                 Spacer(Modifier.weight(1f))
                                 Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
                             }
@@ -1404,13 +1377,14 @@ class MainActivity : ComponentActivity() {
                                             Text("изменено   ", fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                                         }
                                         Text(
-                                            SimpleDateFormat("dd.MM.yy", Locale.getDefault()).format(messageDate),
-                                            fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            SimpleDateFormat("HH:mm", Locale.getDefault()).format(messageDate),
-                                            fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor
+                                            ChatAppearanceSettingsPolicy.formatTimestamp(
+                                                message.timestamp * 1000L,
+                                                System.currentTimeMillis(),
+                                                java.util.TimeZone.getDefault(),
+                                                Locale.getDefault()
+                                            ),
+                                            fontSize = chatMetadataFontSizeSp.sp,
+                                            color = dateTimeColor
                                         )
                                         if (!message.incoming) {
                                             Spacer(Modifier.width(4.dp))
