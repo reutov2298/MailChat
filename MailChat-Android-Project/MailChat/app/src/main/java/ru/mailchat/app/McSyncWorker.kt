@@ -119,7 +119,8 @@ class McSyncWorker(
                     val existing = chats[index].messages[existingIndex]
                     if (parsed.messageVersion <= existing.version) {
                         repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
-                        withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
+                        val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
+                        repo.setMcLabelId(actualLabelId)
                         repo.markProcessed(mail.id)
                         continue
                     }
@@ -143,7 +144,8 @@ class McSyncWorker(
                 }
                 repo.save(chats)
                 repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
-                withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
+                val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
+                repo.setMcLabelId(actualLabelId)
                 repo.markProcessed(mail.id)
                 accepted++
             }
