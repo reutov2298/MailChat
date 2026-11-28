@@ -6,6 +6,17 @@ import java.util.Locale
 import java.util.TimeZone
 
 class ChatAppearanceSettingsPolicyTest {
+    @Test fun mainSettingsSectionsFollowApprovedOrder() {
+        assertEquals(
+            listOf(
+                MainSettingsSection.GOOGLE_ACCOUNT,
+                MainSettingsSection.INTERFACE,
+                MainSettingsSection.LOGGING
+            ),
+            MainSettingsLayoutPolicy.primarySectionOrder
+        )
+    }
+
     @Test fun defaultsMatchApprovedChatAppearance() {
         assertEquals(40, ChatAppearanceSettingsPolicy.DEFAULT_ALPHA_PERCENT)
         assertEquals(10, ChatAppearanceSettingsPolicy.DEFAULT_FONT_SIZE_SP)
