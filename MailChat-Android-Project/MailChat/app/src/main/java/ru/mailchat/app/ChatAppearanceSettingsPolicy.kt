@@ -33,3 +33,18 @@ internal object ChatAppearanceSettingsPolicy {
         return SimpleDateFormat(pattern, locale).apply { this.timeZone = timeZone }.format(Date(timestampMillis))
     }
 }
+
+
+internal enum class MainSettingsSection {
+    GOOGLE_ACCOUNT,
+    INTERFACE,
+    LOGGING
+}
+
+internal object MainSettingsLayoutPolicy {
+    val primarySectionOrder = listOf(
+        MainSettingsSection.GOOGLE_ACCOUNT,
+        MainSettingsSection.INTERFACE,
+        MainSettingsSection.LOGGING
+    )
+}
