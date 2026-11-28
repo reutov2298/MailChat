@@ -405,7 +405,13 @@ class MainActivity : ComponentActivity() {
                                 }
                                 if (disappeared.isNotEmpty()) repo.removePendingHistoryIds(disappeared)
                                 logger.debug("Gmail History: запрошено ID=${pendingIds.size}; получено=${fetchedIds.size}; подтверждённо удалено=${disappeared.size}")
-                                fetched
+                                val trashedIds = fetched.filter { it.trashed }.map { it.id }
+                                trashedIds.forEach { id ->
+                                    logger.debug("Gmail: письмо уже находится в корзине TRASH; импорт пропущен; ID=$id")
+                                    repo.markProcessed(id)
+                                }
+                                if (trashedIds.isNotEmpty()) repo.removePendingHistoryIds(trashedIds)
+                                fetched.filterNot { it.trashed }
                             } catch (e: GmailTransport.GmailApiException) {
                                 if (e.statusCode != 404) throw e
                                 logger.error("Gmail historyId устарел; выполняется восстановительная синхронизация")
