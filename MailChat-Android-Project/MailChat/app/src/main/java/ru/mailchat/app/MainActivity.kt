@@ -592,7 +592,6 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(repo.lastChat().takeIf { saved -> saved.isNotBlank() && chats.any { it.email.equals(saved, true) } })
         }
         var settings by remember { mutableStateOf(false) }
-        var screenSettings by remember { mutableStateOf(false) }
         var chatAppearanceSettings by remember { mutableStateOf(false) }
         var chatMetadataAlphaPercent by remember { mutableIntStateOf(repo.chatMetadataAlphaPercent()) }
         var chatMetadataFontSizeSp by remember { mutableIntStateOf(repo.chatMetadataFontSizeSp()) }
@@ -656,10 +655,9 @@ class MainActivity : ComponentActivity() {
             getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         }
         val refresh = authChanged
-        BackHandler(enabled = settings || logs || screenSettings || chatAppearanceSettings || selected != null) {
+        BackHandler(enabled = settings || logs || chatAppearanceSettings || selected != null) {
             when {
                 chatAppearanceSettings -> chatAppearanceSettings = false
-                screenSettings -> screenSettings = false
                 logs -> logs = false
                 settings -> { applySyncSettings(); settings = false }
                 selected != null -> { selected = null; repo.setLastChat(null) }
@@ -668,7 +666,7 @@ class MainActivity : ComponentActivity() {
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(
                 floatingActionButton = {
-                    if (!settings && !logs && !screenSettings && !chatAppearanceSettings && selected == null) {
+                    if (!settings && !logs && !chatAppearanceSettings && selected == null) {
                         FloatingActionButton(onClick = { showNew = true }, shape = CircleShape) {
                             Icon(Icons.Default.Add, contentDescription = "Новый чат")
                         }
@@ -700,7 +698,7 @@ class MainActivity : ComponentActivity() {
                 topBar = {
                 TopAppBar(title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!logs && !settings && !screenSettings && !chatAppearanceSettings) {
+                        if (!logs && !settings && !chatAppearanceSettings) {
                             if (selectedChat != null) {
                                 HeaderAvatar(
                                     selectedChat.avatarUrl,
@@ -718,7 +716,6 @@ class MainActivity : ComponentActivity() {
                                 when {
                                     logs -> "Логирование"
                                     chatAppearanceSettings -> "Настройка чата"
-                                    screenSettings -> "Настройки экранов"
                                     settings -> "Настройки"
                                     authResolving -> "Подключение..."
                                     else -> selectedChat?.title ?: "MC"
@@ -732,17 +729,16 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }, navigationIcon = {
-                    if (selected != null || settings || logs || screenSettings || chatAppearanceSettings) IconButton(onClick = {
+                    if (selected != null || settings || logs || chatAppearanceSettings) IconButton(onClick = {
                         when {
                             chatAppearanceSettings -> chatAppearanceSettings = false
-                            screenSettings -> screenSettings = false
-                            logs -> logs = false
+                                        logs -> logs = false
                             settings -> { applySyncSettings(); settings = false }
                             selected != null -> { selected = null; repo.setLastChat(null) }
                         }
                     }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
-                    if (!settings && !logs && !screenSettings && !chatAppearanceSettings && selected == null) {
+                    if (!settings && !logs && !chatAppearanceSettings && selected == null) {
                         IconButton(onClick = { settings = true }) { Icon(Icons.Default.Settings, "Настройки") }
                     } else if (!settings && !logs && selectedChat != null) {
                         IconButton(onClick = {
@@ -811,7 +807,12 @@ class MainActivity : ComponentActivity() {
                         Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Визуальное представление", fontWeight = FontWeight.Bold)
+                        Surface(color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f), shape = RoundedCornerShape(14.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text("Пример текста сообщения", color = Color.White, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
+                                Text("изменено   14:35", color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f), fontSize = chatMetadataFontSizeSp.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                            }
+                        }
                         Text("Размер шрифта сообщений", fontWeight = FontWeight.SemiBold)
                         Text("$chatMessageFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Slider(value = chatMessageFontSizeSp.toFloat(), onValueChange = {
@@ -839,63 +840,59 @@ class MainActivity : ComponentActivity() {
                             chatMetadataAlphaPercent = ChatAppearanceSettingsPolicy.normalizeAlphaPercent(it.roundToInt())
                             repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
                         }, valueRange = 0f..100f, steps = 99)
-                        HorizontalDivider()
-                        Text("Пример отображения", fontWeight = FontWeight.SemiBold)
-                        Surface(color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f), shape = RoundedCornerShape(14.dp)) {
-                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                                Text("Пример текста сообщения", color = Color.White, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
-                                Text("изменено   14:35", color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f), fontSize = chatMetadataFontSizeSp.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
-                            }
-                        }
                         Text("Изменения применяются сразу и сохраняются автоматически.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    screenSettings -> Column(
-                        Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        Text("Настройка чата", fontWeight = FontWeight.Bold)
-                        OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Настройка чата")
-                                Spacer(Modifier.weight(1f))
-                                Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
-                            }
-                        }
-                    }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Интерфейс", fontWeight = FontWeight.Bold)
-                        OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("Настройка чата")
-                                Spacer(Modifier.weight(1f))
-                                Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
-                            }
-                        }
-                        HorizontalDivider()
-                        Text("Аккаунт Google", fontWeight = FontWeight.Bold)
-                        Text(
-                            when {
-                                token != null -> accountEmail.ifBlank { repo.myEmail() }
-                                auth.isConnected() -> "Аккаунт сохранён — восстанавливаем подключение"
-                                else -> "Не подключён"
-                            }
-                        )
-                        if (token == null && !auth.isConnected()) {
-                            Button(onClick = {
-                                try {
-                                    auth.start(this@MainActivity)
-                                } catch (e: Exception) {
-                                    errorText = e.message ?: "Ошибка OAuth"
-                                    logger.error("Ошибка запуска OAuth: ${errorText.take(200)}")
-                                    authChanged++
+                        MainSettingsLayoutPolicy.primarySectionOrder.forEach { section ->
+                            when (section) {
+                                MainSettingsSection.GOOGLE_ACCOUNT -> {
+                                    Text("Аккаунт Google", fontWeight = FontWeight.Bold)
+                                    Text(when {
+                                        token != null -> accountEmail.ifBlank { repo.myEmail() }
+                                        auth.isConnected() -> "Аккаунт сохранён — восстанавливаем подключение"
+                                        else -> "Не подключён"
+                                    })
+                                    if (token == null && !auth.isConnected()) {
+                                        Button(onClick = {
+                                            try { auth.start(this@MainActivity) }
+                                            catch (e: Exception) {
+                                                errorText = e.message ?: "Ошибка OAuth"
+                                                logger.error("Ошибка запуска OAuth: ${errorText.take(200)}")
+                                                authChanged++
+                                            }
+                                        }) { Text("Продолжить с Google") }
+                                    }
+                                    if (token == null && auth.isConnected()) OutlinedButton(onClick = { refreshToken() }) { Text("Повторить подключение") }
+                                    if (token != null || auth.isConnected()) OutlinedButton(onClick = {
+                                        auth.disconnect()
+                                        repo.setOwnProfile(null, null)
+                                        token = null
+                                        accountEmail = ""
+                                        logger.add("Аккаунт отключён")
+                                        authChanged++
+                                    }) { Text("Отключить аккаунт") }
+                                    Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    HorizontalDivider()
                                 }
-                            }) { Text("Продолжить с Google") }
+                                MainSettingsSection.INTERFACE -> {
+                                    Text("Интерфейс", fontWeight = FontWeight.Bold)
+                                    OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Настройка чата")
+                                            Spacer(Modifier.weight(1f))
+                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
+                                        }
+                                    }
+                                    HorizontalDivider()
+                                }
+                                MainSettingsSection.LOGGING -> {
+                                    Text("Логирование", fontWeight = FontWeight.Bold)
+                                    Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
+                                    HorizontalDivider()
+                                }
+                            }
                         }
-                        if (token == null && auth.isConnected()) {
-                            OutlinedButton(onClick = { refreshToken() }) { Text("Повторить подключение") }
-                        }
-                        if (token != null || auth.isConnected()) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
-                        Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Отправка сообщений", fontWeight = FontWeight.Bold)
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -903,10 +900,6 @@ class MainActivity : ComponentActivity() {
                             Text("Показывать техническую информацию в письме", fontSize = 14.sp)
                         }
                         Text("Если флажок снят, в теле письма будет только текст сообщения. Служебные данные MC всё равно передаются в MIME-заголовках и используются для проверки и синхронизации.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        HorizontalDivider()
-                        Text("Логирование", fontWeight = FontWeight.Bold)
-                        Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
-                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
