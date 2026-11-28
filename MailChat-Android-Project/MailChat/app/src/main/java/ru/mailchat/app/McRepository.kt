@@ -39,10 +39,12 @@ class McRepository(context: Context) {
 
     fun baseline(): Long = prefs.getLong("baseline", 0L)
     fun setBaseline(value: Long) { prefs.edit().putLong("baseline", value).commit() }
-    fun historyId(): String = prefs.getString("gmail_history_id", "").orEmpty()
-    fun setHistoryId(value: String) { if (value.isNotBlank()) prefs.edit().putString("gmail_history_id", value).commit() }
-    fun mcLabelId(): String = prefs.getString("gmail_mc_label_id", "").orEmpty()
-    fun setMcLabelId(value: String) { if (value.isNotBlank()) prefs.edit().putString("gmail_mc_label_id", value).commit() }
+    private fun mailboxKey(name: String): String =
+        "gmail_" + name + ":" + myEmail().trim().lowercase()
+    fun historyId(): String = prefs.getString(mailboxKey("history_id"), "").orEmpty()
+    fun setHistoryId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("history_id"), value).commit() }
+    fun mcLabelId(): String = prefs.getString(mailboxKey("mc_label_id"), "").orEmpty()
+    fun setMcLabelId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("mc_label_id"), value).commit() }
     private fun gmailThreadKey(account: String, chat: String, suffix: String): String =
         "gmail_" + suffix + ":" + account.trim().lowercase() + ":" + chat.trim().lowercase()
     fun gmailThreadId(account: String, chat: String): String =
