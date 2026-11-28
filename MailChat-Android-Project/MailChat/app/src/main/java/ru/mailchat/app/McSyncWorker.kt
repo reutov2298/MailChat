@@ -66,6 +66,8 @@ class McSyncWorker(
             var nextHistoryId = ""
             val incoming = gmailCall { fresh ->
                 withContext(Dispatchers.IO) {
+                    val completedPending = repo.pendingHistoryIds().filter(repo::isProcessed)
+                    repo.removePendingHistoryIds(completedPending)
                     val cursor = repo.historyId()
                     if (cursor.isNotBlank()) {
                         try {
