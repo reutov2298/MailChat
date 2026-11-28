@@ -38,7 +38,7 @@ class GmailTransport {
         val deletedMessageIds: List<String> = emptyList()
     )
     data class SendResult(val id: String, val threadId: String?, val rfcMessageId: String)
-    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "", val mimeTypes: List<String> = emptyList())
+    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "", val mimeTypes: List<String> = emptyList(), val trashed: Boolean = false)
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String {
         var lastError: GmailApiException? = null
@@ -310,9 +310,16 @@ class GmailTransport {
                             when (name.lowercase()) { "from" -> from = value; "to" -> to = value; "subject" -> subject = value }
                         }
                         val labels = j.optJSONArray("labelIds")
-                        val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
+                        val labelIds = (0 until (labels?.length() ?: 0)).map { labels!!.optString(it) }
+                        val spam = "SPAM" in labelIds
+                        val trashed = GmailHistorySyncPolicy.hasTrashLabel(labelIds)
                         batchResult += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
-                            extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap, parseSenderDisplayName(from), mimeTypes)
+                            extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap,
+                            parseSenderDisplayName(from), mimeTypes, trashed)
+                    }
+                    val returnedIds = batchResult.map { it.id }
+                    if (returnedIds.size != returnedIds.distinct().size || returnedIds.any { it !in batchIds }) {
+                        throw IllegalStateException("Gmail batch вернул повторный или неожиданный ID")
                     }
                     if (batchResult.size + missingInGmail != batchIds.size) {
                         throw IllegalStateException("Gmail batch вернул неполный набор сообщений")
