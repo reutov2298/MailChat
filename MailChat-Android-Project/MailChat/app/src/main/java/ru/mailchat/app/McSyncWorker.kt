@@ -74,7 +74,7 @@ class McSyncWorker(
                             val changes = gmail.history(fresh, cursor)
                             nextHistoryId = changes.historyId
                             repo.addPendingHistoryIds(changes.messageIds)
-                            val pendingIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+                            val pendingIds = repo.pendingHistoryIds().filterNot(repo::isProcessed).filter(repo::isPendingHistoryRetryDue)
                             val fetched = gmail.getMessages(fresh, pendingIds)
                             val fetchedIds = fetched.map { it.id }.toSet()
                             val disappeared = pendingIds.filterNot(fetchedIds::contains)
@@ -113,8 +113,9 @@ class McSyncWorker(
                 val parsed = verification.parsed
                 if (parsed == null) {
                     if (McProtocol.isMcCandidate(mail)) {
-                        logger.error("Фоновое сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}; MIME=${mail.mimeTypes.joinToString(",")}; headers=${mail.headers.size}; bodyBytes=${mail.body.toByteArray(Charsets.UTF_8).size}")
-                        throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}")
+                        val retryDelayMs = repo.schedulePendingHistoryRetry(mail.id)
+                        logger.error("Фоновое сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}; MIME=${mail.mimeTypes.joinToString(",")}; headers=${mail.headers.size}; bodyBytes=${mail.body.toByteArray(Charsets.UTF_8).size}; повтор через ${retryDelayMs / 1000} сек.")
+                        throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}; повтор через ${retryDelayMs / 1000} сек.")
                     }
                     repo.markProcessed(mail.id)
                     repo.removePendingHistoryIds(listOf(mail.id))
