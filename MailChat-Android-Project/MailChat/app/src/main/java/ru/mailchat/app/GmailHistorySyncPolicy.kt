@@ -36,4 +36,6 @@ internal object GmailHistorySyncPolicy {
         unresolvedIds(pendingIds, processedIds).isEmpty()
 
     fun isConfirmedDeletionStatus(httpStatusCode: Int): Boolean = httpStatusCode == 404
+
+    fun hasTrashLabel(labelIds: Collection<String>): Boolean = "TRASH" in labelIds
 }
