@@ -1,59 +1,90 @@
-# MC — Android prototype 1.0.0
+# MC — Android application 1.1.7
 
-This project continues the existing `MailChat` Android project. Package name remains `ru.mailchat.app`; the GitHub Actions workflow and cloud build approach are retained.
+Тестовая сборка MC для Android. Application ID: `ru.mailchat.app`; versionCode: `40`; versionName: `1.1.7`.
 
-## Included in this source revision
+## Что изменено в 1.1.7
 
-- Kotlin + Jetpack Compose Android application shell with Russian UI.
-- Google OAuth 2.0 authorization flow using AppAuth (Authorization Code + PKCE).
-- Gmail API REST transport for profile lookup, sending, message listing, and removing the `SPAM` label.
-- First-connection baseline: existing mail is not imported; the app stores the connection time and queries only later messages.
-- Draft MC mail envelope with `X-MC-*` headers and a duplicated `BEGIN/END MC DATA` block in the visible text body.
-- Ed25519 signing and verification using Bouncy Castle. The private key and OAuth state are stored using AndroidX EncryptedSharedPreferences.
-- Incoming message validation against duplicated MIME headers, recipient, sender, timestamp and signature.
-- Spam-folder candidate scan; only a message that passes the MC envelope/signature checks is removed from `SPAM` and added to the local chat list.
-- Local chat/message persistence, chat deletion (local only), and a compact local log with clear action.
-- GitHub Actions debug APK workflow; OAuth client ID is read from the repository variable `GOOGLE_OAUTH_CLIENT_ID`.
+### Gmail transport and synchronization
 
-## Important limitations — not yet complete
+- Основная синхронизация переведена на Gmail API `users.history.list`: приложение получает идентификаторы новых сообщений после сохранённого `historyId`, а не выполняет повторный поиск по всему временному диапазону.
+- Полный MIME-контент запрашивается только для новых Gmail ID, которых ещё нет в локальном списке обработанных.
+- Batch-загрузка ограничена небольшими группами сообщений, чтобы уменьшить пиковую нагрузку.
+- `historyId` сохраняется только после успешной обработки набора. При HTTP 404 (устаревшая история) используется восстановительный поиск по прежней контрольной дате; после него сохраняется новая точка истории.
+- Первое подключение сохраняет текущую точку Gmail History и не импортирует старую почту. Для аккаунтов, уже подключённых до обновления, первый запуск выполняет однократную миграционную выборку по прежней временной контрольной точке.
+- HTTP 429 и распознаваемые quota/rate-limit ответы HTTP 403 повторяются с экспоненциальной задержкой и случайным разбросом. Ошибки авторизации HTTP 401 по-прежнему обрабатываются обновлением OAuth-токена.
+- Повторные запросы ручной синхронизации объединяются: во время активной синхронизации допускается не более одного дополнительного цикла.
+- Foreground и WorkManager используют общий локальный lock.
 
-This is an early functional prototype, not the full specification. The following must not be represented as implemented:
+### Gmail label MC
 
-- FCM push, Gmail Watch, Pub/Sub and Cloud Functions are not configured or implemented. The current UI offers manual synchronization; background polling is not yet wired.
-- Signed ACK messages and the two-checkmark receipt flow are not implemented. The app must not claim remote delivery confirmation.
-- The sync implementation currently retrieves and validates a bounded set of recent candidates. It is not yet a complete durable Gmail History API cursor implementation.
-- The local data layer currently uses SharedPreferences JSON, not Room; a database migration is still required.
-- The spam scan is performed during manual synchronization, not continuously in the background.
-- The first-contact public key is TOFU. Ed25519 proves message integrity relative to the received key; it does not independently prove the human identity behind a Gmail address.
-- Push notifications, Android 13 notification permission UX, WorkManager periodic sync, full error recovery, and comprehensive automated tests remain future work.
-- Message body is not end-to-end encrypted. Do not use this prototype for confidential communication.
+- При подключении аккаунта приложение проверяет наличие метки `MC` и создаёт её, если она отсутствует.
+- После проверки подписи и сохранения входящего сообщения в локальную базу приложение добавляет метку `MC` и удаляет системные метки `INBOX` и `SPAM`.
+- Успешно отправленные письма MC получают метку `MC`; системная метка `SENT` сохраняется.
+- Письма не перемещаются в корзину и не удаляются автоматически.
+- Если пользователь удалит метку `MC`, приложение обнаружит невалидный label ID при следующем изменении сообщения, создаст метку заново и сохранит новый ID.
+- Обычные письма, не прошедшие проверку MC, не архивируются и не получают метку MC.
 
-## Configure Google OAuth before testing
+### Gmail conversation threads
 
-1. In Google Cloud Console create/configure a project and enable Gmail API.
-2. Configure the OAuth consent screen and add the Gmail accounts used for testing as test users if the app is in Testing mode.
-3. Create the appropriate OAuth client for the Android application. Confirm package name `ru.mailchat.app` and the signing certificate fingerprint used by the debug build.
-4. Add a GitHub repository **Actions variable** named `GOOGLE_OAUTH_CLIENT_ID` with the OAuth client ID. Do not add a client secret to the Android app or repository.
-5. Push the project to the existing `MailChat` repository and run the `Android APK` workflow.
+- При отправке MC формирует RFC-заголовок `Message-ID`; при ответе добавляет `In-Reply-To` и `References` на последнее известное сообщение диалога.
+- Если для текущего аккаунта уже известен Gmail `threadId`, он передаётся в запрос отправки.
+- `threadId` и последний RFC Message-ID хранятся отдельно для каждого почтового аккаунта и диалога.
+- Входящие сообщения обновляют локальную привязку к Gmail Thread.
+- Если Gmail не принимает сообщение в существующую цепочку, это не должно отменять саму отправку MC.
 
-The OAuth client configuration and Google consent-screen verification requirements are external prerequisites. A successful APK build alone does not mean Gmail authorization is configured.
+### Local state and safety
 
-## Build through GitHub Actions
+- Локальная база MC остаётся основным хранилищем переписок.
+- Gmail ID исходящего сообщения помечается обработанным, чтобы синхронизация не пыталась импортировать собственное письмо обратно как входящее.
+- Входящее сообщение сначала сохраняется локально, затем маркируется в Gmail и только после этого отмечается обработанным.
+- OAuth scopes не расширялись: используются уже существующие `gmail.modify` и `gmail.send`.
+- OAuth-токены, подписи и содержимое переписки не должны попадать в диагностические логи.
 
-1. Upload the contents of this folder to the existing repository `https://github.com/reutov2298/MailChat` (preserve the repository and branch).
-2. Open **Actions** → **Android APK** → **Run workflow**.
-3. Wait for the workflow to finish.
-4. Download artifact `MC-1.0.0-prototype-debug` and extract `app-debug.apk`.
+## Известные ограничения
 
-The workflow uses Gradle 8.9 and JDK 17. Application ID remains `ru.mailchat.app`.
+- Gmail может объединить сообщения в цепочку только при соблюдении собственных правил threading (совпадающая тема, корректные RFC-заголовки и локальный для аккаунта threadId). Поэтому группировка гарантируется приложением как best effort, а не для каждого внешнего почтового клиента.
+- Миграционная и восстановительная выборка пока ограничена 50 кандидатами за один запрос; это сохраняет прежнее ограничение прототипа. При очень большом накопившемся объёме писем может потребоваться несколько циклов или отдельная постраничная миграция.
+- SharedPreferences JSON пока остаётся локальным хранилищем; Room не внедрён.
+- Подтверждения доставки ACK и двух галочек пока нет. Состояние отправки в Gmail не является подтверждением получения сообщения адресатом.
+- FCM, Gmail Watch, Pub/Sub и Cloud Functions не настроены.
+- WorkManager ограничивает периодическую задачу минимум 15 минутами; при открытом приложении работает отдельная foreground-проверка.
+- Первый контакт использует TOFU для публичного ключа. Ed25519 подтверждает целостность относительно полученного ключа, но сам по себе не подтверждает личность владельца Gmail-адреса.
+- Текст сообщения не зашифрован сквозным шифрованием. Не использовать тестовую версию для конфиденциальной переписки.
 
-## Next required engineering steps
+## OAuth configuration
 
-1. Build in GitHub Actions and resolve any compiler/dependency issues found by the real Android toolchain.
-2. Test OAuth and Gmail send/receive on two real Android devices.
-3. Replace the provisional search-based sync with Gmail `users.history.list` and durable cursor handling.
-4. Add signed ACK request/response and correct delivery state transitions.
-5. Migrate local data to Room and add message deduplication with durable IDs.
-6. Add Gmail Watch → Pub/Sub → Cloud Function/Run → FCM, plus WorkManager fallback.
-7. Add background spam scan, Android notification channels and permission handling.
-8. Add automated protocol, crypto, MIME and integration tests.
+1. В Google Cloud Console включить Gmail API и настроить OAuth consent screen.
+2. Если приложение находится в режиме Testing, добавить тестируемые Gmail-аккаунты в список test users.
+3. Использовать OAuth Android client для package name `ru.mailchat.app` и соответствующего signing certificate.
+4. В GitHub repository Actions variables должна существовать переменная `GOOGLE_OAUTH_CLIENT_ID`.
+5. Не добавлять OAuth client secret в APK или исходный код.
+
+Текущая версия не запрашивает дополнительных OAuth-разрешений по сравнению с предыдущей сборкой.
+
+## Build and artifact
+
+GitHub Actions workflow: `.github/workflows/android-build.yml`.
+
+- JDK 17
+- Gradle 8.9
+- Build task: `gradle assembleDebug`
+- Проверяется applicationId, versionName, versionCode и постоянная подпись APK.
+- Artifact name: `MC-1.1.7-build40`
+- В архиве находится `app-debug.apk`.
+
+Для подписанной сборки в repository secrets должны быть заданы `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` и `KEY_PASSWORD`.
+
+## Test checklist for 1.1.7
+
+1. Подключить два Gmail-аккаунта на двух Android-устройствах.
+2. Убедиться, что в обоих ящиках существует метка `MC`.
+3. Отправить несколько сообщений в одном диалоге в обе стороны; проверить Gmail Thread и локальную переписку.
+4. Проверить, что входящие сообщения MC получают метку `MC` и исчезают из обычных «Входящих».
+5. Проверить, что отправленные сообщения остаются в «Отправленных» и также имеют метку `MC`.
+6. Проверить, что обычные письма не меняются.
+7. Несколько раз быстро запустить ручную синхронизацию; убедиться, что циклы не накладываются.
+8. Проверить повторную синхронизацию без повторной загрузки уже обработанных сообщений.
+9. Удалить метку `MC` вручную и проверить её автоматическое восстановление.
+10. Проверить восстановительный сценарий при устаревшем History cursor.
+11. Проверить логи на наличие HTTP 403/429, задержек повторных попыток и отсутствия токенов/текста писем.
+
