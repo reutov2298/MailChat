@@ -295,18 +295,42 @@ class GmailTransport {
     }
 
     /** Marks a verified and locally persisted incoming message as MC and archives it. */
-    fun labelIncoming(token: String, messageId: String, labelId: String) {
-        val body = JSONObject()
-            .put("addLabelIds", org.json.JSONArray().put(labelId))
-            .put("removeLabelIds", org.json.JSONArray().put("INBOX").put("SPAM"))
-            .toString()
-        request(GmailConfig.GMAIL_API + "/messages/" + messageId + "/modify", token, "POST", body)
+    fun labelIncoming(token: String, messageId: String, labelId: String): String {
+        fun modify(id: String) {
+            val body = JSONObject()
+                .put("addLabelIds", org.json.JSONArray().put(id))
+                .put("removeLabelIds", org.json.JSONArray().put("INBOX").put("SPAM"))
+                .toString()
+            request(GmailConfig.GMAIL_API + "/messages/" + messageId + "/modify", token, "POST", body)
+        }
+        return try {
+            modify(labelId)
+            labelId
+        } catch (e: GmailApiException) {
+            if (e.statusCode != 400 || !e.responseBody.contains("label", true)) throw e
+            val replacement = ensureMcLabel(token)
+            modify(replacement)
+            onDiagnostic?.invoke("Метка MC была удалена в Gmail и создана повторно")
+            replacement
+        }
     }
 
     /** Adds the MC label to a sent message without removing SENT. */
-    fun labelSent(token: String, messageId: String, labelId: String) {
-        val body = JSONObject().put("addLabelIds", org.json.JSONArray().put(labelId)).toString()
-        request(GmailConfig.GMAIL_API + "/messages/" + messageId + "/modify", token, "POST", body)
+    fun labelSent(token: String, messageId: String, labelId: String): String {
+        fun modify(id: String) {
+            val body = JSONObject().put("addLabelIds", org.json.JSONArray().put(id)).toString()
+            request(GmailConfig.GMAIL_API + "/messages/" + messageId + "/modify", token, "POST", body)
+        }
+        return try {
+            modify(labelId)
+            labelId
+        } catch (e: GmailApiException) {
+            if (e.statusCode != 400 || !e.responseBody.contains("label", true)) throw e
+            val replacement = ensureMcLabel(token)
+            modify(replacement)
+            onDiagnostic?.invoke("Метка MC была удалена в Gmail и создана повторно")
+            replacement
+        }
     }
 
 
