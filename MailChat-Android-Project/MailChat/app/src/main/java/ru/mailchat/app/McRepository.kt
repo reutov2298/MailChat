@@ -159,6 +159,78 @@ class McRepository(context: Context) {
         }
     }
 
+    fun isRejectedHistoryId(id: String): Boolean =
+        prefs.getStringSet(mailboxKey("rejected_history_ids"), emptySet())?.contains(id) == true
+
+    /**
+     * Persist a terminally rejected incoming MC email as a visible chat entry before
+     * acknowledging its Gmail ID. Repeated calls are idempotent.
+     */
+    fun recordRejectedIncoming(
+        senderEmail: String?,
+        gmailId: String,
+        errorCode: String,
+        reason: String,
+        diagnostics: String
+    ): Boolean {
+        require(gmailId.isNotBlank()) { "Gmail ID is required for quarantine" }
+        if (isRejectedHistoryId(gmailId)) {
+            markProcessed(gmailId)
+            removePendingHistoryIds(listOf(gmailId))
+            return false
+        }
+
+        val fallbackChat = "mc-errors@local.invalid"
+        val sender = senderEmail?.trim()?.lowercase()?.takeIf { it.contains("@") } ?: fallbackChat
+        val now = System.currentTimeMillis() / 1000L
+        val messageId = "mc-error:$gmailId"
+        val current = chats().toMutableList()
+        val alreadyVisible = current.any { chat -> chat.messages.any { it.id == messageId } }
+        if (!alreadyVisible) {
+            val errorMessage = McMessage(
+                id = messageId,
+                chatId = sender,
+                sender = sender,
+                recipient = myEmail(),
+                text = reason.ifBlank { "Не удалось обработать входящее сообщение MC" },
+                timestamp = now,
+                incoming = true,
+                state = DeliveryState.FAILED,
+                isProcessingError = true,
+                errorCode = errorCode.ifBlank { "MC_MESSAGE_REJECTED" },
+                errorReason = reason.ifBlank { "Не удалось обработать входящее сообщение MC" },
+                errorDiagnostics = diagnostics.take(6000),
+                gmailId = gmailId
+            )
+            val index = current.indexOfFirst { it.email.equals(sender, true) }
+            if (index >= 0) {
+                current[index] = current[index].copy(
+                    messages = orderedMessages(current[index].messages + errorMessage)
+                )
+            } else {
+                current.add(
+                    McChat(
+                        email = sender,
+                        title = if (sender == fallbackChat) "Ошибки обработки" else sender,
+                        messages = listOf(errorMessage),
+                        nameManuallySet = sender == fallbackChat
+                    )
+                )
+            }
+            save(current)
+        }
+
+        val rejectedKey = mailboxKey("rejected_history_ids")
+        val rejected = prefs.getStringSet(rejectedKey, emptySet())?.toMutableSet() ?: mutableSetOf()
+        rejected.add(gmailId)
+        check(prefs.edit().putStringSet(rejectedKey, rejected).commit()) {
+            "Не удалось сохранить карантин Gmail ID"
+        }
+        markProcessed(gmailId)
+        removePendingHistoryIds(listOf(gmailId))
+        return true
+    }
+
     fun restoreChat(email: String) {
         val set = prefs.getStringSet("deleted_chats", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.remove(email.trim().lowercase())
@@ -181,7 +253,12 @@ class McRepository(context: Context) {
                     m.optLong("sequence", 0L),
                     m.optLong("version", 1L),
                     m.optBoolean("deleted", false),
-                    m.optLong("orderTimestamp", m.optLong("timestamp"))
+                    m.optLong("orderTimestamp", m.optLong("timestamp")),
+                    m.optBoolean("processingError", false),
+                    m.optString("errorCode"),
+                    m.optString("errorReason"),
+                    m.optString("errorDiagnostics"),
+                    m.optString("gmailId")
                 )
             }
             val email = j.optString("email")
@@ -213,6 +290,9 @@ class McRepository(context: Context) {
                         .put("state", m.state.name).put("spam", m.recoveredFromSpam)
                         .put("sequence", m.sequence).put("version", m.version).put("deleted", m.deleted)
                         .put("orderTimestamp", m.orderTimestamp)
+                        .put("processingError", m.isProcessingError)
+                        .put("errorCode", m.errorCode).put("errorReason", m.errorReason)
+                        .put("errorDiagnostics", m.errorDiagnostics).put("gmailId", m.gmailId)
                 )
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
