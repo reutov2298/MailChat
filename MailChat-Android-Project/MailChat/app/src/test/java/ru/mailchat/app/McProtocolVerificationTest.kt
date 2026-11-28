@@ -11,11 +11,12 @@ class McProtocolVerificationTest {
     private val recipient = "me@example.com"
 
     private fun validMail(
+        keyPair: java.security.KeyPair = McCrypto.generate(),
         publicKeyHeader: String? = null,
         signatureHeader: String? = null,
         textBase64Header: String? = null
     ): GmailTransport.RemoteMessage {
-        val pair = McCrypto.generate()
+        val pair = keyPair
         val publicKey = McCrypto.publicKey(pair)
         val messageId = "message-1"
         val chatId = "chat-1"
@@ -85,13 +86,13 @@ class McProtocolVerificationTest {
         val publicKey = McCrypto.publicKey(pair)
         // The helper builds a matching signature for the key; insert MIME folding
         // in transport values only, preserving the original canonical representation.
-        val foldedPublicKey = publicKey.chunked(24).joinToString("\\r\\n \\t")
-        val mail = validMail(publicKeyHeader = foldedPublicKey)
+        val foldedPublicKey = publicKey.chunked(24).joinToString("\r\n \t")
+        val mail = validMail(keyPair = pair, publicKeyHeader = foldedPublicKey)
         val headers = mail.headers.toMutableMap()
         val signature = headers.getValue("x-mc-signature")
-        headers["x-mc-signature"] = signature.chunked(24).joinToString("\\r\\n \\t")
+        headers["x-mc-signature"] = signature.chunked(24).joinToString("\r\n \t")
         val textBase64 = headers.getValue("x-mc-text-base64")
-        headers["x-mc-text-base64"] = textBase64.chunked(4).joinToString("\\n ")
+        headers["x-mc-text-base64"] = textBase64.chunked(4).joinToString("\n ")
         val adjusted = mail.copy(headers = headers)
         val result = McProtocol.verifyDetailed(adjusted, recipient)
         assertNotNull(result.parsed)
