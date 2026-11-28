@@ -42,6 +42,8 @@ class GmailHistorySyncPolicyTest {
         assertFalse(GmailHistorySyncPolicy.isConfirmedDeletionStatus(401))
         assertFalse(GmailHistorySyncPolicy.isConfirmedDeletionStatus(403))
         assertFalse(GmailHistorySyncPolicy.isConfirmedDeletionStatus(429))
+        assertFalse(GmailHistorySyncPolicy.isConfirmedDeletionStatus(500))
+        assertFalse(GmailHistorySyncPolicy.isConfirmedDeletionStatus(503))
         assertEquals(setOf("b"), GmailHistorySyncPolicy.confirmedNotFoundIds(
             requestedIds = listOf("a", "b"),
             fetchedIds = listOf("a")
