@@ -83,6 +83,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
@@ -591,6 +592,10 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(repo.lastChat().takeIf { saved -> saved.isNotBlank() && chats.any { it.email.equals(saved, true) } })
         }
         var settings by remember { mutableStateOf(false) }
+        var screenSettings by remember { mutableStateOf(false) }
+        var chatAppearanceSettings by remember { mutableStateOf(false) }
+        var chatMetadataAlphaPercent by remember { mutableIntStateOf(repo.chatMetadataAlphaPercent()) }
+        var chatMetadataFontSizeSp by remember { mutableIntStateOf(repo.chatMetadataFontSizeSp()) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
         var editContactProfile by remember { mutableStateOf(false) }
@@ -649,14 +654,19 @@ class MainActivity : ComponentActivity() {
             getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         }
         val refresh = authChanged
-        BackHandler(enabled = settings || logs || selected != null) {
-            if (settings) applySyncSettings()
-            if (logs) logs = false else { settings = false; selected = null; repo.setLastChat(null) }
+        BackHandler(enabled = settings || logs || screenSettings || chatAppearanceSettings || selected != null) {
+            when {
+                chatAppearanceSettings -> chatAppearanceSettings = false
+                screenSettings -> screenSettings = false
+                logs -> logs = false
+                settings -> { applySyncSettings(); settings = false }
+                selected != null -> { selected = null; repo.setLastChat(null) }
+            }
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(
                 floatingActionButton = {
-                    if (!settings && !logs && selected == null) {
+                    if (!settings && !logs && !screenSettings && !chatAppearanceSettings && selected == null) {
                         FloatingActionButton(onClick = { showNew = true }, shape = CircleShape) {
                             Icon(Icons.Default.Add, contentDescription = "Новый чат")
                         }
@@ -688,7 +698,7 @@ class MainActivity : ComponentActivity() {
                 topBar = {
                 TopAppBar(title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!logs && !settings) {
+                        if (!logs && !settings && !screenSettings && !chatAppearanceSettings) {
                             if (selectedChat != null) {
                                 HeaderAvatar(
                                     selectedChat.avatarUrl,
@@ -703,8 +713,14 @@ class MainActivity : ComponentActivity() {
                         }
                         Column(Modifier.weight(1f)) {
                             Text(
-                                if (logs) "Логирование" else if (settings) "Настройки"
-                                else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
+                                when {
+                                    logs -> "Логирование"
+                                    chatAppearanceSettings -> "Настройка чата"
+                                    screenSettings -> "Настройки экранов"
+                                    settings -> "Настройки"
+                                    authResolving -> "Подключение..."
+                                    else -> selectedChat?.title ?: "MC"
+                                },
                                 fontWeight = FontWeight.Bold
                             )
                             val subtitle = if (selectedChat != null) {
@@ -714,12 +730,17 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }, navigationIcon = {
-                    if (selected != null || settings || logs) IconButton(onClick = {
-                        if (settings) applySyncSettings()
-                        selected = null; repo.setLastChat(null); settings = false; logs = false
+                    if (selected != null || settings || logs || screenSettings || chatAppearanceSettings) IconButton(onClick = {
+                        when {
+                            chatAppearanceSettings -> chatAppearanceSettings = false
+                            screenSettings -> screenSettings = false
+                            logs -> logs = false
+                            settings -> { applySyncSettings(); settings = false }
+                            selected != null -> { selected = null; repo.setLastChat(null) }
+                        }
                     }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
-                    if (!settings && !logs && selected == null) {
+                    if (!settings && !logs && !screenSettings && !chatAppearanceSettings && selected == null) {
                         IconButton(onClick = { settings = true }) { Icon(Icons.Default.Settings, "Настройки") }
                     } else if (!settings && !logs && selectedChat != null) {
                         IconButton(onClick = {
@@ -784,7 +805,66 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
+                    chatAppearanceSettings -> Column(
+                        Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("Прозрачность даты, времени и надписи «изменено»", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(
+                            value = chatMetadataAlphaPercent.toFloat(),
+                            onValueChange = {
+                                chatMetadataAlphaPercent = it.roundToInt().coerceIn(0, 100)
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp)
+                            },
+                            valueRange = 0f..100f,
+                            steps = 99
+                        )
+                        HorizontalDivider()
+                        Text("Размер шрифта даты, времени и надписи «изменено»", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(
+                            value = chatMetadataFontSizeSp.toFloat(),
+                            onValueChange = {
+                                chatMetadataFontSizeSp = it.roundToInt().coerceIn(8, 16)
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp)
+                            },
+                            valueRange = 8f..16f,
+                            steps = 7
+                        )
+                        HorizontalDivider()
+                        Text("Пример отображения", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "изменено   28.11.26   09:42",
+                            color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f),
+                            fontSize = chatMetadataFontSizeSp.sp,
+                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        )
+                        Text("Изменения применяются сразу и сохраняются автоматически.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    screenSettings -> Column(
+                        Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        Text("Настройки экранов", fontWeight = FontWeight.Bold)
+                        OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Настройка чата")
+                                Spacer(Modifier.weight(1f))
+                                Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
+                            }
+                        }
+                    }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Text("Настройки экранов", fontWeight = FontWeight.Bold)
+                        OutlinedButton(onClick = { screenSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("Настройки экранов")
+                                Spacer(Modifier.weight(1f))
+                                Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
+                            }
+                        }
+                        HorizontalDivider()
                         Text("Аккаунт Google", fontWeight = FontWeight.Bold)
                         Text(
                             when {
@@ -1267,7 +1347,7 @@ class MainActivity : ComponentActivity() {
                                     fontSize = 12.sp
                                 )
                             } else {
-                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 6.dp)) {
+                                Column(Modifier.widthIn(max = 320.dp).padding(start = 13.dp, end = 13.dp, top = 6.dp, bottom = 3.dp)) {
                                     if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
                                     Text(message.text, lineHeight = 18.sp)
                                     Row(
@@ -1276,18 +1356,18 @@ class MainActivity : ComponentActivity() {
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         val messageDate = Date(message.timestamp * 1000L)
-                                        val dateTimeColor = Color.LightGray.copy(alpha = 0.8f)
+                                        val dateTimeColor = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f)
                                         if (message.version > 1L) {
-                                            Text("изменено   ", fontSize = 10.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                                            Text("изменено   ", fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                                         }
                                         Text(
                                             SimpleDateFormat("dd.MM.yy", Locale.getDefault()).format(messageDate),
-                                            fontSize = 10.sp, color = dateTimeColor
+                                            fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Text(
                                             SimpleDateFormat("HH:mm", Locale.getDefault()).format(messageDate),
-                                            fontSize = 10.sp, color = dateTimeColor
+                                            fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor
                                         )
                                         if (!message.incoming) {
                                             Spacer(Modifier.width(4.dp))
