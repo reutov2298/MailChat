@@ -151,6 +151,7 @@ class McSyncWorker(
                         repo.recordRejectedIncoming(
                             McProtocol.senderAddress(mail), mail.id, verification.errorCode, reason, diagnostic
                         )
+                        chats = repo.chats().toMutableList()
                         logger.error("Фоновое сообщение MC отклонено и помещено в карантин. Gmail ID: ${mail.id}; код: ${verification.errorCode}; причина: $reason")
                         continue
                     }
