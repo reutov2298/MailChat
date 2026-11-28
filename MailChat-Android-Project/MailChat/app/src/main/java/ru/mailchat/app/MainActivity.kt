@@ -835,7 +835,6 @@ class MainActivity : ComponentActivity() {
                             steps = 7
                         )
                         HorizontalDivider()
-                        HorizontalDivider()
                         Text("Прозрачность карточки сообщения", fontWeight = FontWeight.SemiBold)
                         Text("$chatCardAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Slider(
