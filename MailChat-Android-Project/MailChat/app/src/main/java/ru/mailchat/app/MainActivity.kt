@@ -596,6 +596,8 @@ class MainActivity : ComponentActivity() {
         var chatAppearanceSettings by remember { mutableStateOf(false) }
         var chatMetadataAlphaPercent by remember { mutableIntStateOf(repo.chatMetadataAlphaPercent()) }
         var chatMetadataFontSizeSp by remember { mutableIntStateOf(repo.chatMetadataFontSizeSp()) }
+        var chatCardAlphaPercent by remember { mutableIntStateOf(repo.chatCardAlphaPercent()) }
+        var chatMessageFontSizeSp by remember { mutableIntStateOf(repo.chatMessageFontSizeSp()) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
         var editContactProfile by remember { mutableStateOf(false) }
@@ -815,7 +817,7 @@ class MainActivity : ComponentActivity() {
                             value = chatMetadataAlphaPercent.toFloat(),
                             onValueChange = {
                                 chatMetadataAlphaPercent = it.roundToInt().coerceIn(0, 100)
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp)
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
                             },
                             valueRange = 0f..100f,
                             steps = 99
@@ -827,19 +829,52 @@ class MainActivity : ComponentActivity() {
                             value = chatMetadataFontSizeSp.toFloat(),
                             onValueChange = {
                                 chatMetadataFontSizeSp = ChatAppearanceSettingsPolicy.normalizeFontSizeSp(it.roundToInt())
-                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp)
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
                             },
                             valueRange = ChatAppearanceSettingsPolicy.MIN_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_FONT_SIZE_SP.toFloat(),
                             steps = 7
                         )
                         HorizontalDivider()
-                        Text("Пример отображения", fontWeight = FontWeight.SemiBold)
-                        Text(
-                            "изменено   28.11.26   09:42",
-                            color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f),
-                            fontSize = chatMetadataFontSizeSp.sp,
-                            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                        HorizontalDivider()
+                        Text("Прозрачность карточки сообщения", fontWeight = FontWeight.SemiBold)
+                        Text("$chatCardAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(
+                            value = chatCardAlphaPercent.toFloat(),
+                            onValueChange = {
+                                chatCardAlphaPercent = ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(it.roundToInt())
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                            },
+                            valueRange = 0f..100f,
+                            steps = 99
                         )
+                        HorizontalDivider()
+                        Text("Размер шрифта текста сообщения", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMessageFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(
+                            value = chatMessageFontSizeSp.toFloat(),
+                            onValueChange = {
+                                chatMessageFontSizeSp = ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(it.roundToInt())
+                                repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                            },
+                            valueRange = ChatAppearanceSettingsPolicy.MIN_MESSAGE_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_MESSAGE_FONT_SIZE_SP.toFloat(),
+                            steps = 13
+                        )
+                        HorizontalDivider()
+                        Text("Пример отображения", fontWeight = FontWeight.SemiBold)
+                        Surface(
+                            color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text("Пример текста сообщения", color = Color.White, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
+                                Text(
+                                    "изменено   28.11.26   09:42",
+                                    color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f),
+                                    fontSize = chatMetadataFontSizeSp.sp,
+                                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
+                                )
+                            }
+                        }
                         Text("Изменения применяются сразу и сохраняются автоматически.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     screenSettings -> Column(
@@ -923,6 +958,8 @@ class MainActivity : ComponentActivity() {
                             chat, Modifier.padding(padding), isSyncing = syncInProgress,
                             chatMetadataAlphaPercent = chatMetadataAlphaPercent,
                             chatMetadataFontSizeSp = chatMetadataFontSizeSp,
+                            chatCardAlphaPercent = chatCardAlphaPercent,
+                            chatMessageFontSizeSp = chatMessageFontSizeSp,
                             onRefresh = { syncNow(source = "жест обновления переписки") },
                             onSend = { body, editing ->
                                 val outgoing = if (editing == null) {
@@ -1217,6 +1254,8 @@ class MainActivity : ComponentActivity() {
         isSyncing: Boolean,
         chatMetadataAlphaPercent: Int,
         chatMetadataFontSizeSp: Int,
+        chatCardAlphaPercent: Int,
+        chatMessageFontSizeSp: Int,
         onRefresh: () -> Unit,
         onSend: (String, McMessage?) -> Unit,
         onDeleteMessage: (McMessage) -> Unit
@@ -1304,6 +1343,7 @@ class MainActivity : ComponentActivity() {
                 items(orderedMessages, key = { it.id }) { message ->
                     var messageCoordinates by remember(message.id) { mutableStateOf<LayoutCoordinates?>(null) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
+                        val messageCardColor = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49)
                         Surface(
                             modifier = Modifier
                                 .then(if (message.deleted || message.isProcessingError) Modifier.fillMaxWidth(0.88f) else Modifier.widthIn(max = 320.dp))
@@ -1319,7 +1359,7 @@ class MainActivity : ComponentActivity() {
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
-                            color = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            color = messageCardColor.copy(alpha = chatCardAlphaPercent / 100f),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
@@ -1353,7 +1393,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 Column(Modifier.widthIn(max = 320.dp).padding(start = 13.dp, end = 13.dp, top = 6.dp, bottom = 3.dp)) {
                                     if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                    Text(message.text, lineHeight = 18.sp)
+                                    Text(message.text, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.End,
