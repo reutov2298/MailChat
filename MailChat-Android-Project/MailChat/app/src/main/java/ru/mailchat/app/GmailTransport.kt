@@ -130,7 +130,7 @@ class GmailTransport {
         val rfcMessageId = "<" + UUID.randomUUID().toString() + "@mc.local>"
         val replyReference = previousRfcMessageId?.trim()?.takeIf {
             it.length in 3..998 && it.startsWith("<") && it.endsWith(">") &&
-                !it.contains('\r') && !it.contains('\n') && !it.any(Char::isISOControl)
+                !it.contains('\r') && !it.contains('\n') && !it.any { ch -> ch.code < 32 || ch.code == 127 }
         }
         val mime = buildString {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
