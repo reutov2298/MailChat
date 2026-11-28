@@ -94,6 +94,9 @@ class McRepository(context: Context) {
     fun isProcessed(id: String): Boolean =
         prefs.getStringSet("processed", emptySet())?.contains(id) == true
 
+    fun processedIds(): Set<String> =
+        prefs.getStringSet("processed", emptySet())?.toSet().orEmpty()
+
     fun markProcessed(id: String) {
         val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(id)
