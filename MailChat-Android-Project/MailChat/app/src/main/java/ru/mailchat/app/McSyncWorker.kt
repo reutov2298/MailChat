@@ -111,7 +111,7 @@ class McSyncWorker(
                 val parsed = verification.parsed
                 if (parsed == null) {
                     if (McProtocol.isMcCandidate(mail)) {
-                        logger.error("Фоновое сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                        logger.error("Фоновое сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}; MIME=${mail.mimeTypes.joinToString(",")}; headers=${mail.headers.size}; bodyBytes=${mail.body.toByteArray(Charsets.UTF_8).size}")
                         throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}")
                     }
                     repo.markProcessed(mail.id)
