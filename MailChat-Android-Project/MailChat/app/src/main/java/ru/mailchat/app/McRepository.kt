@@ -124,6 +124,19 @@ class McRepository(context: Context) {
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
     fun showTechnicalInfoEnabled(): Boolean = prefs.getBoolean("show_technical_info_in_email", false)
 
+    fun chatMetadataAlphaPercent(): Int =
+        ChatAppearanceSettingsPolicy.normalizeAlphaPercent(prefs.getInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_ALPHA_PERCENT))
+
+    fun chatMetadataFontSizeSp(): Int =
+        ChatAppearanceSettingsPolicy.normalizeFontSizeSp(prefs.getInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_FONT_SIZE_SP))
+
+    fun saveChatAppearanceSettings(alphaPercent: Int, fontSizeSp: Int) {
+        prefs.edit()
+            .putInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.normalizeAlphaPercent(alphaPercent))
+            .putInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.normalizeFontSizeSp(fontSizeSp))
+            .apply()
+    }
+
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
         if (prefs.getLong("sync_lock_until", 0L) > now) return@synchronized false
