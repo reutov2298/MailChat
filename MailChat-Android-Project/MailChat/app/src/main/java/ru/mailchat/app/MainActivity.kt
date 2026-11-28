@@ -384,18 +384,31 @@ class MainActivity : ComponentActivity() {
                             try {
                                 val changes = gmail.history(fresh, cursor)
                                 nextHistoryId = changes.historyId
-                                val pendingIds = changes.messageIds.filterNot(repo::isProcessed)
-                                gmail.getMessages(fresh, pendingIds)
+                                repo.addPendingHistoryIds(changes.messageIds)
+                                val pendingIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+                                val fetched = gmail.getMessages(fresh, pendingIds)
+                                val fetchedIds = fetched.map { it.id }.toSet()
+                                val disappeared = pendingIds.filterNot(fetchedIds::contains)
+                                if (disappeared.isNotEmpty()) {
+                                    disappeared.forEach(repo::markProcessed)
+                                    repo.removePendingHistoryIds(disappeared)
+                                    logger.debug("Gmail History: отсутствующие в Gmail ID подтверждены как удалённые: ${disappeared.size}")
+                                }
+                                fetched
                             } catch (e: GmailTransport.GmailApiException) {
                                 if (e.statusCode != 404) throw e
                                 logger.error("Gmail historyId устарел; выполняется восстановительная синхронизация")
                                 nextHistoryId = gmail.profile(fresh).historyId
-                                gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                                val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                                repo.addPendingHistoryIds(recovered.map { it.id })
+                                recovered
                             }
                         } else {
                             logger.info("Для этого аккаунта ещё нет History cursor; выполняется первичная выборка после контрольной даты")
                             nextHistoryId = gmail.profile(fresh).historyId
-                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            repo.addPendingHistoryIds(recovered.map { it.id })
+                            recovered
                         }
                     }
                 }
@@ -406,6 +419,7 @@ class MainActivity : ComponentActivity() {
 
                 for (mail in incoming) {
                     if (repo.isProcessed(mail.id)) {
+                        repo.removePendingHistoryIds(listOf(mail.id))
                         skipped++
                         continue
                     }
@@ -429,9 +443,14 @@ class MainActivity : ComponentActivity() {
                     val parsed = verification.parsed
 
                     if (parsed == null) {
-                        if (mail.subject == "[MC] Message") {
-                            logger.error("Сообщение MC отклонено. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                        if (McProtocol.isMcCandidate(mail)) {
+                            logger.error("Сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                            throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}")
                         }
+                        // A normal non-MC email is a terminal skip, not a failed MC event.
+                        repo.markProcessed(mail.id)
+                        repo.removePendingHistoryIds(listOf(mail.id))
+                        skipped++
                         continue
                     }
                     logger.info("Криптографическая подпись подтверждена. MC messageId: ${parsed.messageId}")
@@ -469,6 +488,7 @@ class MainActivity : ComponentActivity() {
                             val actualLabelId = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
                             repo.setMcLabelId(actualLabelId)
                             repo.markProcessed(mail.id)
+                            repo.removePendingHistoryIds(listOf(mail.id))
                             skipped++
                             continue
                         }
@@ -495,10 +515,15 @@ class MainActivity : ComponentActivity() {
                     val actualLabelId = gmailRequest { fresh -> withContext(Dispatchers.IO) { gmail.labelIncoming(fresh, mail.id, labelId) } }
                     repo.setMcLabelId(actualLabelId)
                     repo.markProcessed(mail.id)
+                    repo.removePendingHistoryIds(listOf(mail.id))
                     accepted++
                     logger.info("Новое сообщение MC сохранено в локальном чате")
                 }
 
+                val unresolvedHistoryIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+                if (unresolvedHistoryIds.isNotEmpty()) {
+                    throw IllegalStateException("Остались необработанные Gmail ID: ${unresolvedHistoryIds.size}; History cursor сохранён без продвижения")
+                }
                 if (nextHistoryId.isNotBlank()) repo.setHistoryId(nextHistoryId)
                 chats = repo.chats()
                 logger.info("Синхронизация завершена. History cursor сохранён; обработка повторных Gmail ID исключена")
