@@ -864,7 +864,7 @@ class MainActivity : ComponentActivity() {
                     }
                     settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                         Text("Интерфейс", fontWeight = FontWeight.Bold)
-                        OutlinedButton(onClick = { screenSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("Настройка чата")
                                 Spacer(Modifier.weight(1f))
