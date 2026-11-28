@@ -94,6 +94,7 @@ class GmailTransport {
         messageVersion: Long = 1L, messageType: String = "text",
         messageTimestamp: Long? = null, senderName: String? = null, senderAvatarUrl: String? = null,
         threadId: String? = null, previousRfcMessageId: String? = null,
+        showTechnicalInfo: Boolean = false,
         sign: (ByteArray) -> String
     ): SendResult {
         val id = messageId
@@ -144,12 +145,15 @@ class GmailTransport {
             }
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
             technical.forEach { append(it).append("\r\n") }
+            append("X-MC-Text-Base64: ").append(textBase64.chunked(72).joinToString("\r\n ")).append("\r\n")
             append("\r\n")
             append(normalizedText.replace("\n", "\r\n"))
             append("\r\n")
-            append("-----BEGIN MC DATA-----\r\n")
-            dataTechnical.forEach { append(it).append("\r\n") }
-            append("-----END MC DATA-----\r\n")
+            if (showTechnicalInfo) {
+                append("-----BEGIN MC DATA-----\r\n")
+                dataTechnical.forEach { append(it).append("\r\n") }
+                append("-----END MC DATA-----\r\n")
+            }
         }
         val encoded = Base64.encodeToString(mime.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
         val payloadObject = JSONObject().put("raw", encoded)
