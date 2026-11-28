@@ -63,4 +63,5 @@ dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("org.bouncycastle:bcprov-jdk18on:1.80")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }
