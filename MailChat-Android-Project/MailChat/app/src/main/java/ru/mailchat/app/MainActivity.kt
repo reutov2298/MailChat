@@ -427,10 +427,14 @@ class MainActivity : ComponentActivity() {
                     logger.debug("Обработка письма Gmail ID: ${mail.id}")
 
                     val mcBlock = mail.body.substringAfter("-----BEGIN MC DATA-----", "").substringBefore("-----END MC DATA-----")
-                    logger.debug("MC DATA extracted: markers=${mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")}, signature=${mcBlock.contains("X-MC-Signature:", ignoreCase = true)}")
-                    val signatureLines = mcBlock.lineSequence()
-                        .filter { it.contains("signature", ignoreCase = true) }
-                        .toList()
+                    val bodyMarkers = mail.body.contains("-----BEGIN MC DATA-----") && mail.body.contains("-----END MC DATA-----")
+                    val bodySignature = mcBlock.contains("X-MC-Signature:", ignoreCase = true)
+                    val headerSignature = mail.headers.keys.any { it.equals("x-mc-signature", true) }
+                    logger.debug("MC DATA extracted: bodyMarkers=$bodyMarkers, bodySignature=$bodySignature, mimeHeaderSignature=$headerSignature, signaturePresent=${bodySignature || headerSignature}")
+                    val signatureLines = (mcBlock.lineSequence()
+                        .filter { it.contains("signature", ignoreCase = true) }.toList() +
+                        mail.headers.filterKeys { it.contains("signature", ignoreCase = true) }
+                            .map { (key, value) -> "$key: length=${value.length}" })
                     logger.debug("MC signature diagnostics: " + signatureLines.map { line ->
                         "length=${line.length}, colon=${line.indexOf(':')}, chars=" +
                             line.takeWhile { it != ':' }.map { it.code.toString(16) }.joinToString(",")
@@ -444,7 +448,7 @@ class MainActivity : ComponentActivity() {
 
                     if (parsed == null) {
                         if (McProtocol.isMcCandidate(mail)) {
-                            logger.error("Сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                            logger.error("Сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}; MIME=${mail.mimeTypes.joinToString(",")}; headers=${mail.headers.size}; bodyBytes=${mail.body.toByteArray(Charsets.UTF_8).size}")
                             throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}")
                         }
                         // A normal non-MC email is a terminal skip, not a failed MC event.
