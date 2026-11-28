@@ -43,6 +43,28 @@ class McRepository(context: Context) {
         "gmail_" + name + ":" + myEmail().trim().lowercase()
     fun historyId(): String = prefs.getString(mailboxKey("history_id"), "").orEmpty()
     fun setHistoryId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("history_id"), value).commit() }
+
+    // Durable per-mailbox queue: a History ID remains pending until it is processed
+    // or Gmail confirms that the message has already disappeared (HTTP 404).
+    fun pendingHistoryIds(): Set<String> =
+        prefs.getStringSet(mailboxKey("pending_history_ids"), emptySet())?.toSet().orEmpty()
+
+    fun addPendingHistoryIds(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val key = mailboxKey("pending_history_ids")
+        val pending = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (pending.addAll(ids.filter(String::isNotBlank))) {
+            prefs.edit().putStringSet(key, pending).commit()
+        }
+    }
+
+    fun removePendingHistoryIds(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        val key = mailboxKey("pending_history_ids")
+        val pending = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        if (pending.removeAll(ids.toSet())) prefs.edit().putStringSet(key, pending).commit()
+    }
+
     fun mcLabelId(): String = prefs.getString(mailboxKey("mc_label_id"), "").orEmpty()
     fun setMcLabelId(value: String) { if (value.isNotBlank()) prefs.edit().putString(mailboxKey("mc_label_id"), value).commit() }
     private fun gmailThreadKey(account: String, chat: String, suffix: String): String =
@@ -102,7 +124,7 @@ class McRepository(context: Context) {
     fun markProcessed(id: String) {
         val set = prefs.getStringSet("processed", emptySet())?.toMutableSet() ?: mutableSetOf()
         set.add(id)
-        prefs.edit().putStringSet("processed", set).apply()
+        prefs.edit().putStringSet("processed", set).commit()
     }
 
     fun restoreChat(email: String) {
@@ -163,7 +185,10 @@ class McRepository(context: Context) {
             }
             root.put(JSONObject().put("email", c.email).put("title", c.title).put("nameManuallySet", c.nameManuallySet).put("senderName", c.senderName).put("avatarUrl", c.avatarUrl).put("messages", messages))
         }
-        prefs.edit().putString("chats", root.toString()).apply()
+        // Incoming messages must be durably stored before their Gmail IDs are acknowledged.
+        check(prefs.edit().putString("chats", root.toString()).commit()) {
+            "Не удалось надёжно сохранить локальную базу MC"
+        }
     }
 
     fun nextSequence(chatId: String, sender: String): Long {
