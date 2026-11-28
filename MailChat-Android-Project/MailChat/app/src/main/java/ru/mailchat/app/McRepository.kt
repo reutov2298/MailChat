@@ -70,6 +70,7 @@ class McRepository(context: Context) {
     fun minimizedIntervalSeconds(): Int = prefs.getInt("sync_minimized_seconds", 30)
     fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 60)
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
+    fun showTechnicalInfoEnabled(): Boolean = prefs.getBoolean("show_technical_info_in_email", false)
 
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
@@ -82,12 +83,13 @@ class McRepository(context: Context) {
         prefs.edit().putLong("sync_lock_until", 0L).commit()
     }
 
-    fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean) {
+    fun saveSyncSettings(open: Int, minimized: Int, closed: Int, diagnosticClick: Boolean, showTechnicalInfo: Boolean) {
         prefs.edit()
             .putInt("sync_open_seconds", open.coerceIn(5, 86400))
             .putInt("sync_minimized_seconds", minimized.coerceIn(5, 86400))
             .putInt("sync_closed_seconds", closed.coerceIn(60, 604800))
             .putBoolean("sync_diagnostic_click", diagnosticClick)
+            .putBoolean("show_technical_info_in_email", showTechnicalInfo)
             .apply()
     }
 
