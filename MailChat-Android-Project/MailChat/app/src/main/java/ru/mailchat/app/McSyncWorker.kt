@@ -76,11 +76,11 @@ class McSyncWorker(
                             if (e.statusCode != 404) throw e
                             logger.error("Фоновая синхронизация: historyId устарел, выполняется восстановительная выборка")
                             nextHistoryId = gmail.profile(fresh).historyId
-                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50)
+                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
                         }
                     } else {
                         nextHistoryId = gmail.profile(fresh).historyId
-                        gmail.list(fresh, "after:$since {in:inbox in:spam}", 50)
+                        gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
                     }
                 }
             }
