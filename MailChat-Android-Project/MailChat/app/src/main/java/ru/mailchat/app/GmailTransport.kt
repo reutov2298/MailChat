@@ -70,6 +70,14 @@ class GmailTransport {
                 val jitter = kotlin.random.Random.nextLong(100L, 500L)
                 onDiagnostic?.invoke("Gmail API HTTP " + e.statusCode + "; повтор через " + ((backoff + jitter) / 1000.0) + " с")
                 Thread.sleep(backoff + jitter)
+            } catch (e: java.io.IOException) {
+                // Retry only idempotent reads and the read-only Gmail batch endpoint.
+                // Never retry messages/send after an ambiguous network failure.
+                val safeToRetry = method == "GET" || url.startsWith("https://www.googleapis.com/batch/gmail/v1")
+                if (!safeToRetry || attempt == 3) throw e
+                val delayMs = (1000L shl attempt).coerceAtMost(8_000L)
+                onDiagnostic?.invoke("Gmail network error ${e.javaClass.simpleName}; повтор безопасного запроса через ${delayMs / 1000} сек.")
+                Thread.sleep(delayMs)
             }
         }
         throw lastError ?: IllegalStateException("Gmail request failed")
