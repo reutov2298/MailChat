@@ -110,7 +110,7 @@ GitHub Actions workflow: `.github/workflows/android-build.yml`.
 
 - JDK 17
 - Gradle 8.9
-- Build task: `gradle testDebugUnitTest assembleDebug`
+- Build task: `gradle testDebugUnitTest` followed by `gradle assembleDebug`
 - Проверяется applicationId, versionName, versionCode и постоянная подпись APK.
 - Artifact name: `MC-1.1.10-build43`
 - В архиве находится `app-debug.apk`.
@@ -131,7 +131,7 @@ GitHub Actions workflow: `.github/workflows/android-build.yml`.
 10. Проверить повторную обработку одних и тех же ID: дубликаты локальных сообщений не создаются.
 11. Проверить, что удаление письма в Gmail не удаляет сохранённое сообщение из локального чата MC.
 12. Проверить, что cursor продвигается только после обработки или подтверждённого удаления всех pending ID.
-13. Запустить `gradle testDebugUnitTest assembleDebug`; все unit-тесты должны пройти до сборки APK.
+13. Запустить `gradle testDebugUnitTest` followed by `gradle assembleDebug`; все unit-тесты должны пройти до сборки APK.
 
 ## Test checklist for 1.1.9
 
