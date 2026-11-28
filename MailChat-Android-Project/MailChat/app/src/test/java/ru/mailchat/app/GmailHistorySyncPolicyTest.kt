@@ -57,6 +57,12 @@ class GmailHistorySyncPolicyTest {
     }
 
     @Test
+    fun trashedMessagesAreRecognizedAsDeletedMailboxItems() {
+        assertTrue(GmailHistorySyncPolicy.hasTrashLabel(listOf("INBOX", "TRASH")))
+        assertFalse(GmailHistorySyncPolicy.hasTrashLabel(listOf("INBOX", "IMPORTANT")))
+    }
+
+    @Test
     fun temporaryFailureLeavesPendingIdUnresolvedAndBlocksCursor() {
         val unresolved = GmailHistorySyncPolicy.unresolvedIds(
             pendingIds = listOf("a", "b"),
