@@ -155,12 +155,16 @@ class GmailTransport {
         return SendResult(result.optString("id", id), result.optString("threadId").takeIf { it.isNotBlank() }, rfcMessageId)
     }
 
-    fun list(token: String, query: String, max: Int = 50): List<RemoteMessage> {
+    fun list(token: String, query: String, max: Int = 50, excludeIds: Set<String> = emptySet()): List<RemoteMessage> {
         val q = URLEncoder.encode(query, "UTF-8")
         val root = JSONObject(request("${GmailConfig.GMAIL_API}/messages?maxResults=$max&includeSpamTrash=true&q=$q", token))
         val ids = root.optJSONArray("messages") ?: return emptyList()
         if (ids.length() == 0) return emptyList()
-        val messageIds = (0 until ids.length()).mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
+        val messageIds = (0 until ids.length())
+            .mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
+            .distinct()
+            .filterNot(excludeIds::contains)
+        if (messageIds.isEmpty()) return emptyList()
         val boundary = "mc_batch_${UUID.randomUUID().toString().replace("-", "")}"
         val batchBody = buildString {
             messageIds.forEachIndexed { index, id ->
