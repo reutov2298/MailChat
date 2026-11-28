@@ -83,6 +83,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 
 private val Navy = Color(0xFF17283B)
 private val Blue = Color(0xFF3390EC)
@@ -591,6 +592,11 @@ class MainActivity : ComponentActivity() {
             mutableStateOf(repo.lastChat().takeIf { saved -> saved.isNotBlank() && chats.any { it.email.equals(saved, true) } })
         }
         var settings by remember { mutableStateOf(false) }
+        var chatAppearanceSettings by remember { mutableStateOf(false) }
+        var chatMetadataAlphaPercent by remember { mutableIntStateOf(repo.chatMetadataAlphaPercent()) }
+        var chatMetadataFontSizeSp by remember { mutableIntStateOf(repo.chatMetadataFontSizeSp()) }
+        var chatCardAlphaPercent by remember { mutableIntStateOf(repo.chatCardAlphaPercent()) }
+        var chatMessageFontSizeSp by remember { mutableIntStateOf(repo.chatMessageFontSizeSp()) }
         var logs by remember { mutableStateOf(false) }
         var showNew by remember { mutableStateOf(false) }
         var editContactProfile by remember { mutableStateOf(false) }
@@ -649,14 +655,18 @@ class MainActivity : ComponentActivity() {
             getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
         }
         val refresh = authChanged
-        BackHandler(enabled = settings || logs || selected != null) {
-            if (settings) applySyncSettings()
-            if (logs) logs = false else { settings = false; selected = null; repo.setLastChat(null) }
+        BackHandler(enabled = settings || logs || chatAppearanceSettings || selected != null) {
+            when {
+                chatAppearanceSettings -> chatAppearanceSettings = false
+                logs -> logs = false
+                settings -> { applySyncSettings(); settings = false }
+                selected != null -> { selected = null; repo.setLastChat(null) }
+            }
         }
         MaterialTheme(colorScheme = darkColorScheme(primary = Blue, background = Color(0xFF101820), surface = Color(0xFF172330), onSurface = Color(0xFFEAF0F6))) {
             Scaffold(
                 floatingActionButton = {
-                    if (!settings && !logs && selected == null) {
+                    if (!settings && !logs && !chatAppearanceSettings && selected == null) {
                         FloatingActionButton(onClick = { showNew = true }, shape = CircleShape) {
                             Icon(Icons.Default.Add, contentDescription = "Новый чат")
                         }
@@ -688,7 +698,7 @@ class MainActivity : ComponentActivity() {
                 topBar = {
                 TopAppBar(title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (!logs && !settings) {
+                        if (!logs && !settings && !chatAppearanceSettings) {
                             if (selectedChat != null) {
                                 HeaderAvatar(
                                     selectedChat.avatarUrl,
@@ -703,8 +713,13 @@ class MainActivity : ComponentActivity() {
                         }
                         Column(Modifier.weight(1f)) {
                             Text(
-                                if (logs) "Логирование" else if (settings) "Настройки"
-                                else if (authResolving) "Подключение..." else selectedChat?.title ?: "MC",
+                                when {
+                                    logs -> "Логирование"
+                                    chatAppearanceSettings -> "Настройка чата"
+                                    settings -> "Настройки"
+                                    authResolving -> "Подключение..."
+                                    else -> selectedChat?.title ?: "MC"
+                                },
                                 fontWeight = FontWeight.Bold
                             )
                             val subtitle = if (selectedChat != null) {
@@ -714,12 +729,16 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }, navigationIcon = {
-                    if (selected != null || settings || logs) IconButton(onClick = {
-                        if (settings) applySyncSettings()
-                        selected = null; repo.setLastChat(null); settings = false; logs = false
+                    if (selected != null || settings || logs || chatAppearanceSettings) IconButton(onClick = {
+                        when {
+                            chatAppearanceSettings -> chatAppearanceSettings = false
+                                        logs -> logs = false
+                            settings -> { applySyncSettings(); settings = false }
+                            selected != null -> { selected = null; repo.setLastChat(null) }
+                        }
                     }) { Icon(Icons.Default.ArrowBack, "Назад") }
                 }, actions = {
-                    if (!settings && !logs && selected == null) {
+                    if (!settings && !logs && !chatAppearanceSettings && selected == null) {
                         IconButton(onClick = { settings = true }) { Icon(Icons.Default.Settings, "Настройки") }
                     } else if (!settings && !logs && selectedChat != null) {
                         IconButton(onClick = {
@@ -784,31 +803,96 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                     }
-                    settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        Text("Аккаунт Google", fontWeight = FontWeight.Bold)
-                        Text(
-                            when {
-                                token != null -> accountEmail.ifBlank { repo.myEmail() }
-                                auth.isConnected() -> "Аккаунт сохранён — восстанавливаем подключение"
-                                else -> "Не подключён"
+                    chatAppearanceSettings -> Column(
+                        Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(color = Color(0xFF145B49).copy(alpha = chatCardAlphaPercent / 100f), shape = RoundedCornerShape(14.dp)) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                Text("Пример текста сообщения", color = Color.White, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
+                                Text("изменено   14:35", color = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f), fontSize = chatMetadataFontSizeSp.sp, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                             }
-                        )
-                        if (token == null && !auth.isConnected()) {
-                            Button(onClick = {
-                                try {
-                                    auth.start(this@MainActivity)
-                                } catch (e: Exception) {
-                                    errorText = e.message ?: "Ошибка OAuth"
-                                    logger.error("Ошибка запуска OAuth: ${errorText.take(200)}")
-                                    authChanged++
+                        }
+                        Text("Размер шрифта сообщений", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMessageFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatMessageFontSizeSp.toFloat(), onValueChange = {
+                            chatMessageFontSizeSp = ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = ChatAppearanceSettingsPolicy.MIN_MESSAGE_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_MESSAGE_FONT_SIZE_SP.toFloat(), steps = 13)
+                        HorizontalDivider()
+                        Text("Прозрачность карточек", fontWeight = FontWeight.SemiBold)
+                        Text("$chatCardAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatCardAlphaPercent.toFloat(), onValueChange = {
+                            chatCardAlphaPercent = ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = 0f..100f, steps = 99)
+                        HorizontalDivider()
+                        Text("Размер шрифта временной метки", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataFontSizeSp sp", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatMetadataFontSizeSp.toFloat(), onValueChange = {
+                            chatMetadataFontSizeSp = ChatAppearanceSettingsPolicy.normalizeFontSizeSp(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = ChatAppearanceSettingsPolicy.MIN_FONT_SIZE_SP.toFloat()..ChatAppearanceSettingsPolicy.MAX_FONT_SIZE_SP.toFloat(), steps = 7)
+                        HorizontalDivider()
+                        Text("Прозрачность временной метки", fontWeight = FontWeight.SemiBold)
+                        Text("$chatMetadataAlphaPercent%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Slider(value = chatMetadataAlphaPercent.toFloat(), onValueChange = {
+                            chatMetadataAlphaPercent = ChatAppearanceSettingsPolicy.normalizeAlphaPercent(it.roundToInt())
+                            repo.saveChatAppearanceSettings(chatMetadataAlphaPercent, chatMetadataFontSizeSp, chatCardAlphaPercent, chatMessageFontSizeSp)
+                        }, valueRange = 0f..100f, steps = 99)
+                        Text("Изменения применяются сразу и сохраняются автоматически.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    settings -> Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        MainSettingsLayoutPolicy.primarySectionOrder.forEach { section ->
+                            when (section) {
+                                MainSettingsSection.GOOGLE_ACCOUNT -> {
+                                    Text("Аккаунт Google", fontWeight = FontWeight.Bold)
+                                    Text(when {
+                                        token != null -> accountEmail.ifBlank { repo.myEmail() }
+                                        auth.isConnected() -> "Аккаунт сохранён — восстанавливаем подключение"
+                                        else -> "Не подключён"
+                                    })
+                                    if (token == null && !auth.isConnected()) {
+                                        Button(onClick = {
+                                            try { auth.start(this@MainActivity) }
+                                            catch (e: Exception) {
+                                                errorText = e.message ?: "Ошибка OAuth"
+                                                logger.error("Ошибка запуска OAuth: ${errorText.take(200)}")
+                                                authChanged++
+                                            }
+                                        }) { Text("Продолжить с Google") }
+                                    }
+                                    if (token == null && auth.isConnected()) OutlinedButton(onClick = { refreshToken() }) { Text("Повторить подключение") }
+                                    if (token != null || auth.isConnected()) OutlinedButton(onClick = {
+                                        auth.disconnect()
+                                        repo.setOwnProfile(null, null)
+                                        token = null
+                                        accountEmail = ""
+                                        logger.add("Аккаунт отключён")
+                                        authChanged++
+                                    }) { Text("Отключить аккаунт") }
+                                    Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    HorizontalDivider()
                                 }
-                            }) { Text("Продолжить с Google") }
+                                MainSettingsSection.INTERFACE -> {
+                                    Text("Интерфейс", fontWeight = FontWeight.Bold)
+                                    OutlinedButton(onClick = { chatAppearanceSettings = true }, modifier = Modifier.fillMaxWidth()) {
+                                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                            Text("Настройка чата")
+                                            Spacer(Modifier.weight(1f))
+                                            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.graphicsLayer(rotationZ = 180f))
+                                        }
+                                    }
+                                    HorizontalDivider()
+                                }
+                                MainSettingsSection.LOGGING -> {
+                                    Text("Логирование", fontWeight = FontWeight.Bold)
+                                    Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
+                                    HorizontalDivider()
+                                }
+                            }
                         }
-                        if (token == null && auth.isConnected()) {
-                            OutlinedButton(onClick = { refreshToken() }) { Text("Повторить подключение") }
-                        }
-                        if (token != null || auth.isConnected()) OutlinedButton(onClick = { auth.disconnect(); repo.setOwnProfile(null, null); token = null; accountEmail = ""; logger.add("Аккаунт отключён"); authChanged++ }) { Text("Отключить аккаунт") }
-                        Text("Имя и фото профиля Google передаются собеседнику вместе с вашими сообщениями. Для выдачи нового разрешения profile переподключите Google-аккаунт.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Отправка сообщений", fontWeight = FontWeight.Bold)
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -816,10 +900,6 @@ class MainActivity : ComponentActivity() {
                             Text("Показывать техническую информацию в письме", fontSize = 14.sp)
                         }
                         Text("Если флажок снят, в теле письма будет только текст сообщения. Служебные данные MC всё равно передаются в MIME-заголовках и используются для проверки и синхронизации.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        HorizontalDivider()
-                        Text("Логирование", fontWeight = FontWeight.Bold)
-                        Button(onClick = { logs = true; logText = logger.read(); logSize = logger.sizeBytes() }) { Text("Открыть журнал") }
-                        Text("Безопасность: текст первой версии не зашифрован. Закрытый ключ подписи хранится в зашифрованных локальных настройках.", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         HorizontalDivider()
                         Text("Автоматическая проверка почты", fontWeight = FontWeight.Bold)
                         OutlinedTextField(value = openSeconds, onValueChange = { openSeconds = it.filter(Char::isDigit).take(6) }, label = { Text("Каждые N секунд — приложение открыто") }, singleLine = true)
@@ -841,6 +921,10 @@ class MainActivity : ComponentActivity() {
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
                         Conversation(
                             chat, Modifier.padding(padding), isSyncing = syncInProgress,
+                            chatMetadataAlphaPercent = chatMetadataAlphaPercent,
+                            chatMetadataFontSizeSp = chatMetadataFontSizeSp,
+                            chatCardAlphaPercent = chatCardAlphaPercent,
+                            chatMessageFontSizeSp = chatMessageFontSizeSp,
                             onRefresh = { syncNow(source = "жест обновления переписки") },
                             onSend = { body, editing ->
                                 val outgoing = if (editing == null) {
@@ -1133,6 +1217,10 @@ class MainActivity : ComponentActivity() {
         chat: McChat,
         modifier: Modifier,
         isSyncing: Boolean,
+        chatMetadataAlphaPercent: Int,
+        chatMetadataFontSizeSp: Int,
+        chatCardAlphaPercent: Int,
+        chatMessageFontSizeSp: Int,
         onRefresh: () -> Unit,
         onSend: (String, McMessage?) -> Unit,
         onDeleteMessage: (McMessage) -> Unit
@@ -1220,6 +1308,7 @@ class MainActivity : ComponentActivity() {
                 items(orderedMessages, key = { it.id }) { message ->
                     var messageCoordinates by remember(message.id) { mutableStateOf<LayoutCoordinates?>(null) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
+                        val messageCardColor = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49)
                         Surface(
                             modifier = Modifier
                                 .then(if (message.deleted || message.isProcessingError) Modifier.fillMaxWidth(0.88f) else Modifier.widthIn(max = 320.dp))
@@ -1235,7 +1324,7 @@ class MainActivity : ComponentActivity() {
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
-                            color = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            color = messageCardColor.copy(alpha = chatCardAlphaPercent / 100f),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
@@ -1267,27 +1356,28 @@ class MainActivity : ComponentActivity() {
                                     fontSize = 12.sp
                                 )
                             } else {
-                                Column(Modifier.widthIn(max = 320.dp).padding(horizontal = 13.dp, vertical = 6.dp)) {
+                                Column(Modifier.widthIn(max = 320.dp).padding(start = 13.dp, end = 13.dp, top = 6.dp, bottom = 3.dp)) {
                                     if (message.recoveredFromSpam) Text("Сообщение попало в спам и было автоматически добавлено как не спам", fontSize = 10.sp, color = Color(0xFFFFC56B))
-                                    Text(message.text, lineHeight = 18.sp)
+                                    Text(message.text, fontSize = chatMessageFontSizeSp.sp, lineHeight = (chatMessageFontSizeSp * 1.125f).sp)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         val messageDate = Date(message.timestamp * 1000L)
-                                        val dateTimeColor = Color.LightGray.copy(alpha = 0.8f)
+                                        val dateTimeColor = Color.LightGray.copy(alpha = chatMetadataAlphaPercent / 100f)
                                         if (message.version > 1L) {
-                                            Text("изменено   ", fontSize = 10.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+                                            Text("изменено   ", fontSize = chatMetadataFontSizeSp.sp, color = dateTimeColor, fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
                                         }
                                         Text(
-                                            SimpleDateFormat("dd.MM.yy", Locale.getDefault()).format(messageDate),
-                                            fontSize = 10.sp, color = dateTimeColor
-                                        )
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            SimpleDateFormat("HH:mm", Locale.getDefault()).format(messageDate),
-                                            fontSize = 10.sp, color = dateTimeColor
+                                            ChatAppearanceSettingsPolicy.formatTimestamp(
+                                                message.timestamp * 1000L,
+                                                System.currentTimeMillis(),
+                                                java.util.TimeZone.getDefault(),
+                                                Locale.getDefault()
+                                            ),
+                                            fontSize = chatMetadataFontSizeSp.sp,
+                                            color = dateTimeColor
                                         )
                                         if (!message.incoming) {
                                             Spacer(Modifier.width(4.dp))

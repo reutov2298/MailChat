@@ -8,7 +8,19 @@ class McRepository(context: Context) {
     companion object { private val syncLock = Any() }
     private val prefs = context.getSharedPreferences("mc_local", Context.MODE_PRIVATE)
 
-    init { prefs.edit().remove("deleted_chats").apply() }
+    init {
+        prefs.edit().remove("deleted_chats").apply()
+        // 1.1.14: apply the approved appearance defaults once to all upgraded installations.
+        if (!prefs.getBoolean("chat_appearance_defaults_1_1_14_applied", false)) {
+            prefs.edit()
+                .putInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_ALPHA_PERCENT)
+                .putInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_FONT_SIZE_SP)
+                .putInt("chat_card_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_CARD_ALPHA_PERCENT)
+                .putInt("chat_message_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_MESSAGE_FONT_SIZE_SP)
+                .putBoolean("chat_appearance_defaults_1_1_14_applied", true)
+                .commit()
+        }
+    }
 
     fun pendingChatDeletions(): Map<String, Long> {
         val json = try { JSONObject(prefs.getString("pending_chat_deletions", "{}")) } catch (_: Exception) { JSONObject() }
@@ -123,6 +135,27 @@ class McRepository(context: Context) {
     fun closedIntervalSeconds(): Int = prefs.getInt("sync_closed_seconds", 60)
     fun diagnosticClickEnabled(): Boolean = prefs.getBoolean("sync_diagnostic_click", false)
     fun showTechnicalInfoEnabled(): Boolean = prefs.getBoolean("show_technical_info_in_email", false)
+
+    fun chatMetadataAlphaPercent(): Int =
+        ChatAppearanceSettingsPolicy.normalizeAlphaPercent(prefs.getInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_ALPHA_PERCENT))
+
+    fun chatMetadataFontSizeSp(): Int =
+        ChatAppearanceSettingsPolicy.normalizeFontSizeSp(prefs.getInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_FONT_SIZE_SP))
+
+    fun chatCardAlphaPercent(): Int =
+        ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(prefs.getInt("chat_card_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_CARD_ALPHA_PERCENT))
+
+    fun chatMessageFontSizeSp(): Int =
+        ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(prefs.getInt("chat_message_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_MESSAGE_FONT_SIZE_SP))
+
+    fun saveChatAppearanceSettings(alphaPercent: Int, metadataFontSizeSp: Int, cardAlphaPercent: Int, messageFontSizeSp: Int) {
+        prefs.edit()
+            .putInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.normalizeAlphaPercent(alphaPercent))
+            .putInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.normalizeFontSizeSp(metadataFontSizeSp))
+            .putInt("chat_card_alpha_percent", ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(cardAlphaPercent))
+            .putInt("chat_message_font_size_sp", ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(messageFontSizeSp))
+            .apply()
+    }
 
     fun acquireSyncLock(): Boolean = synchronized(syncLock) {
         val now = System.currentTimeMillis()
