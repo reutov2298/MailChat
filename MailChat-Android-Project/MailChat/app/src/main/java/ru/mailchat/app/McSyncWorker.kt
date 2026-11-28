@@ -71,16 +71,30 @@ class McSyncWorker(
                         try {
                             val changes = gmail.history(fresh, cursor)
                             nextHistoryId = changes.historyId
-                            gmail.getMessages(fresh, changes.messageIds.filterNot(repo::isProcessed))
+                            repo.addPendingHistoryIds(changes.messageIds)
+                            val pendingIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+                            val fetched = gmail.getMessages(fresh, pendingIds)
+                            val fetchedIds = fetched.map { it.id }.toSet()
+                            val disappeared = pendingIds.filterNot(fetchedIds::contains)
+                            if (disappeared.isNotEmpty()) {
+                                disappeared.forEach(repo::markProcessed)
+                                repo.removePendingHistoryIds(disappeared)
+                                logger.debug("Gmail History: удалённых до загрузки ID: ${disappeared.size}")
+                            }
+                            fetched
                         } catch (e: GmailTransport.GmailApiException) {
                             if (e.statusCode != 404) throw e
                             logger.error("Фоновая синхронизация: historyId устарел, выполняется восстановительная выборка")
                             nextHistoryId = gmail.profile(fresh).historyId
-                            gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                            repo.addPendingHistoryIds(recovered.map { it.id })
+                            recovered
                         }
                     } else {
                         nextHistoryId = gmail.profile(fresh).historyId
-                        gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                        val recovered = gmail.list(fresh, "after:$since {in:inbox in:spam}", 50, repo.processedIds())
+                        repo.addPendingHistoryIds(recovered.map { it.id })
+                        recovered
                     }
                 }
             }
@@ -88,14 +102,20 @@ class McSyncWorker(
             var chats = repo.chats().toMutableList()
 
             for (mail in incoming) {
-                if (repo.isProcessed(mail.id)) continue
+                if (repo.isProcessed(mail.id)) {
+                    repo.removePendingHistoryIds(listOf(mail.id))
+                    continue
+                }
                 val verification = McProtocol.verifyDetailed(mail, repo.myEmail())
                 verification.diagnostics.forEach { logger.debug(it) }
                 val parsed = verification.parsed
                 if (parsed == null) {
-                    if (mail.subject == "[MC] Message") {
-                        logger.error("Фоновая проверка отклонила сообщение MC. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                    if (McProtocol.isMcCandidate(mail)) {
+                        logger.error("Фоновое сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}")
+                        throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}")
                     }
+                    repo.markProcessed(mail.id)
+                    repo.removePendingHistoryIds(listOf(mail.id))
                     continue
                 }
                 logger.info("Фоновая проверка: подпись подтверждена. MC messageId: ${parsed.messageId}")
@@ -122,6 +142,7 @@ class McSyncWorker(
                         val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
                         repo.setMcLabelId(actualLabelId)
                         repo.markProcessed(mail.id)
+                        repo.removePendingHistoryIds(listOf(mail.id))
                         continue
                     }
                     val updatedMessages = chats[index].messages.toMutableList()
@@ -147,9 +168,14 @@ class McSyncWorker(
                 val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
                 repo.setMcLabelId(actualLabelId)
                 repo.markProcessed(mail.id)
+                repo.removePendingHistoryIds(listOf(mail.id))
                 accepted++
             }
 
+            val unresolvedHistoryIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+            if (unresolvedHistoryIds.isNotEmpty()) {
+                throw IllegalStateException("Остались необработанные Gmail ID: ${unresolvedHistoryIds.size}; History cursor не продвинут")
+            }
             if (nextHistoryId.isNotBlank()) repo.setHistoryId(nextHistoryId)
             if (accepted > 0) showIncomingNotification(accepted)
             logger.info("Фоновая проверка завершена. Новых сообщений: $accepted; History cursor сохранён")
