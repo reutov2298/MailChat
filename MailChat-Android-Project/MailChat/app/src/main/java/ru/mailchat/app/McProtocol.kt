@@ -23,8 +23,38 @@ object McProtocol {
     data class Verification(
         val parsed: Parsed?,
         val reason: String?,
-        val diagnostics: List<String> = emptyList()
+        val diagnostics: List<String> = emptyList(),
+        val errorCode: String = "MC_MESSAGE_REJECTED",
+        val errorField: String? = null
     )
+
+    private class InvalidBase64FieldException(val fieldName: String) :
+        IllegalArgumentException("Некорректное Base64 поле $fieldName")
+
+    internal fun normalizeBase64Transport(value: String, fieldName: String, urlSafe: Boolean): String {
+        val compact = buildString(value.length) {
+            value.forEach { ch ->
+                if (ch != ' ' && ch != '\\t' && ch != '\\r' && ch != '\\n') append(ch)
+            }
+        }
+        val alphabet = if (urlSafe) Regex("^[A-Za-z0-9_-]+={0,2}$")
+            else Regex("^[A-Za-z0-9+/]+={0,2}$")
+        val paddingIndex = compact.indexOf('=')
+        if (!alphabet.matches(compact) || compact.length % 4 == 1 ||
+            (paddingIndex >= 0 && compact.length % 4 != 0)
+        ) throw InvalidBase64FieldException(fieldName)
+        try {
+            if (urlSafe) Base64.getUrlDecoder().decode(compact)
+            else Base64.getDecoder().decode(compact)
+        } catch (_: IllegalArgumentException) {
+            throw InvalidBase64FieldException(fieldName)
+        }
+        return compact
+    }
+
+    fun senderAddress(mail: GmailTransport.RemoteMessage): String? =
+        Regex("[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}", RegexOption.IGNORE_CASE)
+            .find(mail.from)?.value?.lowercase(Locale.ROOT)
 
     data class CanonicalInput(
         val messageId: String, val chatId: String, val senderId: String,
@@ -197,7 +227,9 @@ object McProtocol {
                 "Ed25519", McCrypto.provider
             ).generatePublic(
                 X509EncodedKeySpec(
-                    Base64.getDecoder().decode(values.getValue("x-mc-public-key"))
+                    Base64.getDecoder().decode(
+                        normalizeBase64Transport(values.getValue("x-mc-public-key"), "x-mc-public-key", false)
+                    )
                 )
             )
 
@@ -224,7 +256,8 @@ object McProtocol {
             // is allowed to normalize (line endings, transfer encoding, etc.).
             val text = values["x-mc-text-base64"]?.takeIf { it.isNotBlank() }?.let { encoded ->
                 require(encoded.length <= 2_800_000) { "Подписанный текст слишком длинный" }
-                normalizeText(String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8))
+                val normalized = normalizeBase64Transport(encoded, "x-mc-text-base64", true)
+                normalizeText(String(Base64.getUrlDecoder().decode(normalized), Charsets.UTF_8))
             } ?: normalizeText(rawText)
 
             val messageId = values.getValue("x-mc-message-id")
@@ -247,7 +280,8 @@ object McProtocol {
                 val encoded = values[key].orEmpty()
                 if (encoded.isBlank()) return ""
                 if (encoded.length > maxBytes * 2) throw IllegalArgumentException("Профильное поле слишком длинное")
-                val decoded = String(Base64.getUrlDecoder().decode(encoded), Charsets.UTF_8)
+                val normalized = normalizeBase64Transport(encoded, key, true)
+                val decoded = String(Base64.getUrlDecoder().decode(normalized), Charsets.UTF_8)
                 if (decoded.toByteArray(Charsets.UTF_8).size > maxBytes) throw IllegalArgumentException("Профильное поле слишком длинное")
                 return decoded
             }
@@ -264,10 +298,15 @@ object McProtocol {
                 senderName, senderAvatar
             )
             val canonicalBytes = canonical(input).toByteArray(Charsets.UTF_8)
-            val signature = values.getValue("x-mc-signature")
+            val signature = normalizeBase64Transport(
+                values.getValue("x-mc-signature"), "x-mc-signature", false
+            )
             val diagnostics = signatureDiagnostics("receiver", input, signature)
             if (!McCrypto.verify(publicKey, canonicalBytes, signature)) {
-                return Verification(null, "Криптографическая подпись не прошла проверку", diagnostics)
+                return Verification(
+                    null, "Криптографическая подпись не прошла проверку", diagnostics,
+                    "MC_SIGNATURE_INVALID", "x-mc-signature"
+                )
             }
 
             val sequence = values.getValue("x-mc-sequence").toLong()
@@ -282,11 +321,17 @@ object McProtocol {
                 "${it.className}.${it.methodName}:${it.lineNumber}"
             }
             val detail = e.message.orEmpty().replace(Regex("[\\r\\n]+"), " ").take(160)
-            val diagnostic = "MC_VERIFY_EXCEPTION type=${e.javaClass.simpleName} detail=$detail stack=$stack"
+            val invalidBase64 = e as? InvalidBase64FieldException
+            val errorCode = if (invalidBase64 != null) "MC_BASE64_INVALID" else "MC_MESSAGE_MALFORMED"
+            val errorField = invalidBase64?.fieldName
+            val diagnostic = "MC_VERIFY_EXCEPTION code=$errorCode field=${errorField ?: "unknown"} type=${e.javaClass.simpleName} detail=$detail stack=$stack"
             return Verification(
                 null,
-                "Ошибка проверки: ${e.javaClass.simpleName}" + if (detail.isBlank()) "" else ": $detail",
-                listOf(diagnostic)
+                "Ошибка проверки: " + (errorField?.let { "некорректное поле $it" } ?: e.javaClass.simpleName) +
+                    if (detail.isBlank()) "" else ": $detail",
+                listOf(diagnostic),
+                errorCode,
+                errorField
             )
         }
     }
