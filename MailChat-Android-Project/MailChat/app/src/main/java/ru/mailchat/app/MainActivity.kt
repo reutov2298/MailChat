@@ -291,28 +291,36 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 logger.add("Начата отправка события $messageType получателю: $to")
+                val account = accountEmail.ifBlank { repo.myEmail() }
                 val sent = gmailRequest { fresh ->
                     withContext(Dispatchers.IO) {
                         val pair = identity.keyPair()
-                        val labelId = repo.mcLabelId().ifBlank { gmail.ensureMcLabel(fresh).also(repo::setMcLabelId) }
-                        val result = gmail.send(
-                            fresh, accountEmail.ifBlank { repo.myEmail() }, to, message.text,
+                        gmail.send(
+                            fresh, account, to, message.text,
                             message.chatId, identity.publicKey(),
                             messageId = message.id, sequence = message.sequence,
                             messageVersion = message.version, messageType = messageType,
                             messageTimestamp = message.timestamp,
                             senderName = repo.ownProfileName(),
                             senderAvatarUrl = repo.ownProfileAvatar(),
-                            threadId = repo.gmailThreadId(accountEmail.ifBlank { repo.myEmail() }, to),
-                            previousRfcMessageId = repo.gmailLastMessageId(accountEmail.ifBlank { repo.myEmail() }, to)
+                            threadId = repo.gmailThreadId(account, to),
+                            previousRfcMessageId = repo.gmailLastMessageId(account, to)
                         ) { bytes -> McCrypto.sign(pair, bytes) }
-                        val actualLabelId = gmail.labelSent(fresh, result.id, labelId)
-                        repo.setMcLabelId(actualLabelId)
-                        repo.markProcessed(result.id)
-                        repo.saveGmailThread(accountEmail.ifBlank { repo.myEmail() }, to, result.threadId, result.rfcMessageId)
-                        result
                     }
                 }
+                // Persist the successful send before the independent label request. A label failure
+                // must never cause gmailRequest to resend the already delivered message.
+                repo.saveGmailThread(account, to, sent.threadId, sent.rfcMessageId)
+                repo.markProcessed(sent.id)
+                runCatching {
+                    gmailRequest { fresh ->
+                        withContext(Dispatchers.IO) {
+                            val labelId = repo.mcLabelId().ifBlank { gmail.ensureMcLabel(fresh).also(repo::setMcLabelId) }
+                            gmail.labelSent(fresh, sent.id, labelId)
+                        }
+                    }
+                }.onSuccess(repo::setMcLabelId)
+                    .onFailure { logger.error("Сообщение отправлено, но не удалось добавить метку MC: ${it.javaClass.simpleName}") }
                 logger.add("Событие MC отправлено в Gmail: ${sent.id}; messageId=${message.id}; sequence=${message.sequence}; version=${message.version}")
                 done(null)
             } catch (e: Exception) {
