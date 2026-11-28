@@ -84,4 +84,12 @@ class GmailHistorySyncPolicyTest {
             processedIds = listOf("a", "b", "c")
         ))
     }
+
+    @Test
+    fun terminallyRejectedIdIsResolvedAfterDurableQuarantine() {
+        assertTrue(GmailHistorySyncPolicy.canAdvanceCursor(
+            pendingIds = listOf("accepted", "rejected"),
+            processedIds = listOf("accepted", "rejected")
+        ))
+    }
 }
