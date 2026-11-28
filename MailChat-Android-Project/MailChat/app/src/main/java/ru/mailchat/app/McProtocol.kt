@@ -34,7 +34,7 @@ object McProtocol {
     internal fun normalizeBase64Transport(value: String, fieldName: String, urlSafe: Boolean): String {
         val compact = buildString(value.length) {
             value.forEach { ch ->
-                if (ch != ' ' && ch != '\\t' && ch != '\\r' && ch != '\\n') append(ch)
+                if (ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') append(ch)
             }
         }
         val alphabet = if (urlSafe) Regex("^[A-Za-z0-9_-]+={0,2}$")
