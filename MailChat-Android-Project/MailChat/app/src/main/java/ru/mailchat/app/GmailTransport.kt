@@ -128,12 +128,16 @@ class GmailTransport {
         val dataTechnical = technical.toMutableList()
         dataTechnical.add("X-MC-Text-Base64: " + textBase64.chunked(72).joinToString("\r\n "))
         val rfcMessageId = "<" + UUID.randomUUID().toString() + "@mc.local>"
+        val replyReference = previousRfcMessageId?.trim()?.takeIf {
+            it.length in 3..998 && it.startsWith("<") && it.endsWith(">") &&
+                !it.contains('\r') && !it.contains('\n') && !it.any(Char::isISOControl)
+        }
         val mime = buildString {
             append("From: $from\r\nTo: $to\r\nSubject: [MC] Message\r\n")
             append("Message-ID: " + rfcMessageId + "\r\n")
-            if (!previousRfcMessageId.isNullOrBlank()) {
-                append("In-Reply-To: " + previousRfcMessageId + "\r\n")
-                append("References: " + previousRfcMessageId + "\r\n")
+            if (replyReference != null) {
+                append("In-Reply-To: " + replyReference + "\r\n")
+                append("References: " + replyReference + "\r\n")
             }
             append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n")
             technical.forEach { append(it).append("\r\n") }
