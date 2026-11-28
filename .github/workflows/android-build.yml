@@ -70,7 +70,7 @@ jobs:
           echo "$BADGING" | grep -q "package: name='ru.mailchat.app'"
           echo "$BADGING" | grep -q "versionName='1.1.11'"
           VERSION_CODE="$(echo "$BADGING" | sed -n "s/.*versionCode='\\([0-9][0-9]*\\)'.*/\\1/p" | head -1)"
-          test -n "$VERSION_CODE" && test "$VERSION_CODE" -eq 43
+          test -n "$VERSION_CODE" && test "$VERSION_CODE" -eq 44
           ACTUAL="$("$ANDROID_HOME/build-tools/$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | sed -n 's/.* certificate SHA-256 digest: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           EXPECTED="$(keytool -list -v -keystore "$RUNNER_TEMP/mc-release.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" | sed -n 's/.*SHA256: //p' | head -1 | tr -d ':' | tr '[:lower:]' '[:upper:]')"
           test -n "$EXPECTED" || { echo "Could not read signing certificate from keystore"; exit 1; }
