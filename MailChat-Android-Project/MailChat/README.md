@@ -154,7 +154,7 @@ GitHub Actions workflow: `.github/workflows/android-build.yml`.
 - Gradle 8.9
 - Build task: `gradle testDebugUnitTest` followed by `gradle assembleDebug`
 - Проверяется applicationId, versionName, versionCode и постоянная подпись APK.
-- Artifact name: `MC-1.1.12-build45`
+- Artifact name: `MC-1.1.13-build46`
 - В архиве находится `app-debug.apk`.
 
 Для подписанной сборки в repository secrets должны быть заданы `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` и `KEY_PASSWORD`.
