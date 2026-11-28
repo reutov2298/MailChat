@@ -235,46 +235,76 @@ class GmailTransport {
     /** Fetches only the supplied, already deduplicated IDs, in small batches. */
     fun getMessages(token: String, ids: List<String>, batchSize: Int = 10): List<RemoteMessage> {
         if (ids.isEmpty()) return emptyList()
+        val uniqueIds = ids.distinct()
         val result = mutableListOf<RemoteMessage>()
-        ids.distinct().chunked(batchSize.coerceIn(1, 20)).forEach { batchIds ->
-            val boundary = "mc_batch_" + UUID.randomUUID().toString().replace("-", "")
-            val body = buildString {
-                batchIds.forEachIndexed { index, id ->
-                    append("--").append(boundary).append("\r\nContent-Type: application/http\r\n")
-                    append("Content-ID: <mc-").append(index).append(">\r\n\r\n")
-                    append("GET /gmail/v1/users/me/messages/").append(id).append("?format=full HTTP/1.1\r\n\r\n")
+        var deletedBeforeFetch = 0
+        uniqueIds.chunked(batchSize.coerceIn(1, 20)).forEach { batchIds ->
+            var attempt = 0
+            var batchComplete = false
+            while (!batchComplete) {
+                try {
+                    val boundary = "mc_batch_" + UUID.randomUUID().toString().replace("-", "")
+                    val body = buildString {
+                        batchIds.forEachIndexed { index, id ->
+                            append("--").append(boundary).append("\r\nContent-Type: application/http\r\n")
+                            append("Content-ID: <mc-").append(index).append(">\r\n\r\n")
+                            append("GET /gmail/v1/users/me/messages/").append(id).append("?format=full HTTP/1.1\r\n\r\n")
+                        }
+                        append("--").append(boundary).append("--\r\n")
+                    }
+                    val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", body, "multipart/mixed; boundary=" + boundary)
+                    val responseBoundary = Regex("(?m)^--([^\r\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
+                        ?: throw IllegalStateException("Gmail batch response has no boundary")
+                    val batchResult = mutableListOf<RemoteMessage>()
+                    var missingInGmail = 0
+                    response.split("--" + responseBoundary).forEach { part ->
+                        val httpStart = part.indexOf("HTTP/1.")
+                        if (httpStart < 0) return@forEach
+                        val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part.substring(httpStart))?.groupValues?.get(1)?.toIntOrNull()
+                        if (status == 404) {
+                            missingInGmail++
+                            return@forEach
+                        }
+                        if (status != null && status !in 200..299) {
+                            throw GmailApiException(status, part.substring(httpStart).take(300))
+                        }
+                        val jsonStart = part.indexOf("{", httpStart)
+                        val jsonEnd = part.lastIndexOf("}")
+                        if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
+                        val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
+                        val payload = j.optJSONObject("payload")
+                        val headers = payload?.optJSONArray("headers")
+                        var from = ""; var to = ""; var subject = ""
+                        val headerMap = linkedMapOf<String, String>()
+                        if (headers != null) for (i in 0 until headers.length()) {
+                            val h = headers.getJSONObject(i); val name = h.optString("name"); val value = h.optString("value")
+                            headerMap[name.lowercase()] = value
+                            when (name.lowercase()) { "from" -> from = value; "to" -> to = value; "subject" -> subject = value }
+                        }
+                        val labels = j.optJSONArray("labelIds")
+                        val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
+                        batchResult += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
+                            extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap, parseSenderDisplayName(from))
+                    }
+                    if (batchResult.size + missingInGmail != batchIds.size) {
+                        throw IllegalStateException("Gmail batch вернул неполный набор сообщений")
+                    }
+                    result.addAll(batchResult)
+                    deletedBeforeFetch += missingInGmail
+                    batchComplete = true
+                } catch (e: GmailApiException) {
+                    val reason = e.responseBody.lowercase()
+                    val retryable = e.statusCode == 429 ||
+                        (e.statusCode == 403 && listOf("ratelimitexceeded", "userratelimitexceeded", "quotaexceeded", "too many concurrent").any(reason::contains))
+                    if (!retryable || attempt >= 3) throw e
+                    val delayMs = (1000L shl attempt).coerceAtMost(30_000L) + kotlin.random.Random.nextLong(100L, 500L)
+                    onDiagnostic?.invoke("Gmail batch: HTTP " + e.statusCode + "; повтор пакета через " + delayMs + " мс")
+                    Thread.sleep(delayMs)
+                    attempt++
                 }
-                append("--").append(boundary).append("--\r\n")
-            }
-            val response = request("https://www.googleapis.com/batch/gmail/v1", token, "POST", body, "multipart/mixed; boundary=" + boundary)
-            val responseBoundary = Regex("(?m)^--([^\r\n]+)").find(response.trimStart())?.groupValues?.get(1)?.removeSuffix("--")
-                ?: throw IllegalStateException("Gmail batch response has no boundary")
-            response.split("--" + responseBoundary).forEach { part ->
-                val httpStart = part.indexOf("HTTP/1.")
-                if (httpStart < 0) return@forEach
-                val status = Regex("HTTP/1\\.[01]\\s+(\\d{3})").find(part.substring(httpStart))?.groupValues?.get(1)?.toIntOrNull()
-                if (status != null && status !in 200..299) throw GmailApiException(status, part.substring(httpStart).take(300))
-                val jsonStart = part.indexOf("{", httpStart)
-                val jsonEnd = part.lastIndexOf("}")
-                if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
-                val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
-                val payload = j.optJSONObject("payload")
-                val headers = payload?.optJSONArray("headers")
-                var from = ""; var to = ""; var subject = ""
-                val headerMap = linkedMapOf<String, String>()
-                if (headers != null) for (i in 0 until headers.length()) {
-                    val h = headers.getJSONObject(i); val name = h.optString("name"); val value = h.optString("value")
-                    headerMap[name.lowercase()] = value
-                    when (name.lowercase()) { "from" -> from = value; "to" -> to = value; "subject" -> subject = value }
-                }
-                val labels = j.optJSONArray("labelIds")
-                val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
-                result += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
-                    extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap, parseSenderDisplayName(from))
             }
         }
-        onDiagnostic?.invoke("Gmail batch: запрошено новых писем=" + ids.distinct().size + ", получено=" + result.size)
-        if (result.size != ids.distinct().size) throw IllegalStateException("Gmail batch вернул неполный набор писем")
+        onDiagnostic?.invoke("Gmail batch: ID=" + uniqueIds.size + ", загружено=" + result.size + ", уже удалено в Gmail=" + deletedBeforeFetch)
         return result
     }
 
