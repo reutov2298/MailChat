@@ -280,7 +280,7 @@ class GmailTransport {
                     val retryable = e.statusCode == 429 ||
                         (e.statusCode == 403 && listOf("ratelimitexceeded", "userratelimitexceeded", "quotaexceeded", "too many concurrent").any(reason::contains))
                     if (!retryable || attempt >= 3) throw e
-                    val delayMs = (1000L shl attempt).coerceAtMost(30_000L) + kotlin.random.Random.nextLong(100L, 500L)
+                    val delayMs = (e.retryAfterSeconds?.times(1000L) ?: (1000L shl attempt)).coerceAtMost(30_000L) + kotlin.random.Random.nextLong(100L, 500L)
                     onDiagnostic?.invoke("Gmail batch: HTTP " + e.statusCode + "; повтор пакета через " + delayMs + " мс")
                     Thread.sleep(delayMs)
                     attempt++
