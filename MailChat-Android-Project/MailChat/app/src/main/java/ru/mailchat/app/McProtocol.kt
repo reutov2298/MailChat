@@ -320,15 +320,15 @@ object McProtocol {
             val stack = e.stackTrace.take(12).joinToString(" <- ") {
                 "${it.className}.${it.methodName}:${it.lineNumber}"
             }
-            val detail = e.message.orEmpty().replace(Regex("[\\r\\n]+"), " ").take(160)
             val invalidBase64 = e as? InvalidBase64FieldException
             val errorCode = if (invalidBase64 != null) "MC_BASE64_INVALID" else "MC_MESSAGE_MALFORMED"
             val errorField = invalidBase64?.fieldName
-            val diagnostic = "MC_VERIFY_EXCEPTION code=$errorCode field=${errorField ?: "unknown"} type=${e.javaClass.simpleName} detail=$detail stack=$stack"
+            // Never copy exception messages that might echo attacker-controlled header values.
+            val safeDetail = if (errorField != null) "Некорректное Base64 поле $errorField" else "Подробности исключения скрыты"
+            val diagnostic = "MC_VERIFY_EXCEPTION code=$errorCode field=${errorField ?: "unknown"} type=${e.javaClass.simpleName} detail=$safeDetail stack=$stack"
             return Verification(
                 null,
-                "Ошибка проверки: " + (errorField?.let { "некорректное поле $it" } ?: e.javaClass.simpleName) +
-                    if (detail.isBlank()) "" else ": $detail",
+                "Ошибка проверки: " + (errorField?.let { "некорректное поле $it" } ?: e.javaClass.simpleName),
                 listOf(diagnostic),
                 errorCode,
                 errorField
