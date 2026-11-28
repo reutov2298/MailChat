@@ -32,7 +32,11 @@ class GmailTransport {
 
     data class Profile(val email: String, val historyId: String)
     data class OwnProfile(val name: String?, val photoUrl: String?)
-    data class HistoryChanges(val historyId: String, val messageIds: List<String>)
+    data class HistoryChanges(
+        val historyId: String,
+        val messageIds: List<String>,
+        val deletedMessageIds: List<String> = emptyList()
+    )
     data class SendResult(val id: String, val threadId: String?, val rfcMessageId: String)
     data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "", val mimeTypes: List<String> = emptyList())
 
@@ -203,10 +207,14 @@ class GmailTransport {
         var pageToken: String? = null
         var latestHistoryId = startHistoryId
         val ids = linkedSetOf<String>()
+        val deletedIds = linkedSetOf<String>()
         do {
             val query = buildString {
                 append("startHistoryId=").append(URLEncoder.encode(startHistoryId, "UTF-8"))
-                append("&historyTypes=messageAdded&maxResults=").append(maxResults.coerceIn(1, 500))
+                append("&historyTypes=messageAdded")
+                append("&historyTypes=messageDeleted")
+                append("&historyTypes=labelAdded")
+                append("&maxResults=").append(maxResults.coerceIn(1, 500))
                 if (!pageToken.isNullOrBlank()) append("&pageToken=").append(URLEncoder.encode(pageToken, "UTF-8"))
             }
             val root = JSONObject(request(GmailConfig.GMAIL_API + "/history?" + query, token))
@@ -214,16 +222,33 @@ class GmailTransport {
             val history = root.optJSONArray("history")
             if (history != null) for (i in 0 until history.length()) {
                 val entry = history.optJSONObject(i) ?: continue
-                val added = entry.optJSONArray("messagesAdded") ?: continue
-                for (j in 0 until added.length()) {
+                val added = entry.optJSONArray("messagesAdded")
+                if (added != null) for (j in 0 until added.length()) {
                     val message = added.optJSONObject(j)?.optJSONObject("message") ?: continue
                     message.optString("id").takeIf { it.isNotBlank() }?.let(ids::add)
+                }
+                val deleted = entry.optJSONArray("messagesDeleted")
+                if (deleted != null) for (j in 0 until deleted.length()) {
+                    val message = deleted.optJSONObject(j)?.optJSONObject("message") ?: continue
+                    message.optString("id").takeIf { it.isNotBlank() }?.let(deletedIds::add)
+                }
+                // Moving a message to Gmail Trash is represented as a TRASH label addition.
+                val labelAdded = entry.optJSONArray("labelsAdded")
+                if (labelAdded != null) for (j in 0 until labelAdded.length()) {
+                    val change = labelAdded.optJSONObject(j) ?: continue
+                    val labels = change.optJSONArray("labelIds") ?: continue
+                    val isTrash = (0 until labels.length()).any { labels.optString(it) == "TRASH" }
+                    if (isTrash) {
+                        change.optJSONObject("message")?.optString("id")
+                            ?.takeIf { it.isNotBlank() }?.let(deletedIds::add)
+                    }
                 }
             }
             pageToken = root.optString("nextPageToken").takeIf { it.isNotBlank() }
         } while (pageToken != null)
-        onDiagnostic?.invoke("Gmail History: новых ID=" + ids.size + "; historyId=" + latestHistoryId)
-        return HistoryChanges(latestHistoryId, ids.toList())
+        ids.removeAll(deletedIds)
+        onDiagnostic?.invoke("Gmail History: новых ID=" + ids.size + "; удалённых ID=" + deletedIds.size + "; historyId=" + latestHistoryId)
+        return HistoryChanges(latestHistoryId, ids.toList(), deletedIds.toList())
     }
 
     /** Fetches only the supplied, already deduplicated IDs, in small batches. */
