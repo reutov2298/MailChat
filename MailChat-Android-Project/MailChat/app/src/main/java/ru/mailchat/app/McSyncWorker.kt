@@ -73,16 +73,25 @@ class McSyncWorker(
                         try {
                             val changes = gmail.history(fresh, cursor)
                             nextHistoryId = changes.historyId
-                            repo.addPendingHistoryIds(changes.messageIds)
-                            val pendingIds = repo.pendingHistoryIds().filterNot(repo::isProcessed).filter(repo::isPendingHistoryRetryDue)
+                            val plan = GmailHistorySyncPolicy.plan(changes.messageIds, changes.deletedMessageIds)
+                            plan.deletedIds.forEach { id ->
+                                logger.debug("Gmail History: подтверждено удаление письма; Gmail ID=$id")
+                                repo.markProcessed(id)
+                                repo.removePendingHistoryIds(listOf(id))
+                            }
+                            repo.addPendingHistoryIds(plan.idsToFetch)
+                            val pendingIds = repo.pendingHistoryIds()
+                                .filterNot(repo::isProcessed)
+                                .filter(repo::isPendingHistoryRetryDue)
                             val fetched = gmail.getMessages(fresh, pendingIds)
                             val fetchedIds = fetched.map { it.id }.toSet()
-                            val disappeared = pendingIds.filterNot(fetchedIds::contains)
-                            if (disappeared.isNotEmpty()) {
-                                disappeared.forEach(repo::markProcessed)
-                                repo.removePendingHistoryIds(disappeared)
-                                logger.debug("Gmail History: удалённых до загрузки ID: ${disappeared.size}")
+                            val disappeared = GmailHistorySyncPolicy.confirmedNotFoundIds(pendingIds, fetchedIds)
+                            disappeared.forEach { id ->
+                                logger.debug("Gmail History: Gmail подтвердил отсутствие письма (HTTP 404); ID=$id")
+                                repo.markProcessed(id)
                             }
+                            if (disappeared.isNotEmpty()) repo.removePendingHistoryIds(disappeared)
+                            logger.debug("Gmail History: запрошено ID=${pendingIds.size}; получено=${fetchedIds.size}; подтверждённо удалено=${disappeared.size}")
                             fetched
                         } catch (e: GmailTransport.GmailApiException) {
                             if (e.statusCode != 404) throw e
@@ -100,6 +109,18 @@ class McSyncWorker(
                     }
                 }
             }
+            suspend fun labelIncomingOrAcceptDeletion(messageId: String): String? {
+                return try {
+                    withContext(Dispatchers.IO) {
+                        gmailCall { fresh -> gmail.labelIncoming(fresh, messageId, labelId) }
+                    }
+                } catch (e: GmailTransport.GmailApiException) {
+                    if (!GmailHistorySyncPolicy.isConfirmedDeletionStatus(e.statusCode)) throw e
+                    logger.debug("Gmail: письмо удалено до установки метки MC; локальная копия сохранена; ID=$messageId")
+                    null
+                }
+            }
+
             var accepted = 0
             var chats = repo.chats().toMutableList()
 
@@ -142,8 +163,7 @@ class McSyncWorker(
                     val existing = chats[index].messages[existingIndex]
                     if (parsed.messageVersion <= existing.version) {
                         repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
-                        val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
-                        repo.setMcLabelId(actualLabelId)
+                        labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
                         repo.markProcessed(mail.id)
                         repo.removePendingHistoryIds(listOf(mail.id))
                         continue
@@ -168,15 +188,17 @@ class McSyncWorker(
                 }
                 repo.save(chats)
                 repo.saveGmailThread(repo.myEmail(), parsed.sender, mail.threadId, mail.headers["message-id"])
-                val actualLabelId = withContext(Dispatchers.IO) { gmailCall { fresh -> gmail.labelIncoming(fresh, mail.id, labelId) } }
-                repo.setMcLabelId(actualLabelId)
+                labelIncomingOrAcceptDeletion(mail.id)?.let(repo::setMcLabelId)
                 repo.markProcessed(mail.id)
                 repo.removePendingHistoryIds(listOf(mail.id))
                 accepted++
             }
 
-            val unresolvedHistoryIds = repo.pendingHistoryIds().filterNot(repo::isProcessed)
+            val unresolvedHistoryIds = GmailHistorySyncPolicy.unresolvedIds(
+                repo.pendingHistoryIds(), repo.processedIds()
+            )
             if (unresolvedHistoryIds.isNotEmpty()) {
+                logger.error("Gmail History: cursor не продвигается; необработанные ID=${unresolvedHistoryIds.size}; примеры=${unresolvedHistoryIds.take(5).joinToString()}")
                 throw IllegalStateException("Остались необработанные Gmail ID: ${unresolvedHistoryIds.size}; History cursor не продвинут")
             }
             if (nextHistoryId.isNotBlank()) repo.setHistoryId(nextHistoryId)
