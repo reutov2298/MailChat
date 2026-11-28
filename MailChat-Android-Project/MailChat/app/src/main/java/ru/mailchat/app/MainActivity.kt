@@ -921,6 +921,8 @@ class MainActivity : ComponentActivity() {
                         val chat = chats.firstOrNull { it.email.equals(email, true) } ?: McChat(email)
                         Conversation(
                             chat, Modifier.padding(padding), isSyncing = syncInProgress,
+                            chatMetadataAlphaPercent = chatMetadataAlphaPercent,
+                            chatMetadataFontSizeSp = chatMetadataFontSizeSp,
                             onRefresh = { syncNow(source = "жест обновления переписки") },
                             onSend = { body, editing ->
                                 val outgoing = if (editing == null) {
@@ -1213,6 +1215,8 @@ class MainActivity : ComponentActivity() {
         chat: McChat,
         modifier: Modifier,
         isSyncing: Boolean,
+        chatMetadataAlphaPercent: Int,
+        chatMetadataFontSizeSp: Int,
         onRefresh: () -> Unit,
         onSend: (String, McMessage?) -> Unit,
         onDeleteMessage: (McMessage) -> Unit
