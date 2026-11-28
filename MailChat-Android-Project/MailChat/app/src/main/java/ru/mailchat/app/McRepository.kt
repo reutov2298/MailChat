@@ -46,6 +46,24 @@ class McRepository(context: Context) {
 
     // Durable per-mailbox queue: a History ID remains pending until it is processed
     // or Gmail confirms that the message has already disappeared (HTTP 404).
+    private fun pendingRetryState(): JSONObject =
+        try { JSONObject(prefs.getString(mailboxKey("pending_retry_state"), "{}")) } catch (_: Exception) { JSONObject() }
+
+    fun isPendingHistoryRetryDue(id: String, now: Long = System.currentTimeMillis()): Boolean =
+        pendingRetryState().optJSONObject(id)?.optLong("nextAt", 0L)?.let { it <= now } ?: true
+
+    /** Exponential retry delay: 30 s, 60 s, 120 s ... capped at 6 hours. */
+    fun schedulePendingHistoryRetry(id: String): Long {
+        val key = mailboxKey("pending_retry_state")
+        val state = pendingRetryState()
+        val previousAttempts = state.optJSONObject(id)?.optInt("attempts", 0) ?: 0
+        val exponent = previousAttempts.coerceIn(0, 10)
+        val delayMs = (30_000L * (1L shl exponent)).coerceAtMost(6L * 60L * 60L * 1000L)
+        state.put(id, JSONObject().put("attempts", previousAttempts + 1).put("nextAt", System.currentTimeMillis() + delayMs))
+        check(prefs.edit().putString(key, state.toString()).commit()) { "Не удалось сохранить время повторной обработки Gmail ID" }
+        return delayMs
+    }
+
     fun pendingHistoryIds(): Set<String> =
         prefs.getStringSet(mailboxKey("pending_history_ids"), emptySet())?.toSet().orEmpty()
 
@@ -60,9 +78,15 @@ class McRepository(context: Context) {
 
     fun removePendingHistoryIds(ids: Collection<String>) {
         if (ids.isEmpty()) return
-        val key = mailboxKey("pending_history_ids")
-        val pending = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
-        if (pending.removeAll(ids.toSet())) prefs.edit().putStringSet(key, pending).commit()
+        val pendingKey = mailboxKey("pending_history_ids")
+        val pending = prefs.getStringSet(pendingKey, emptySet())?.toMutableSet() ?: mutableSetOf()
+        pending.removeAll(ids.toSet())
+        val retryKey = mailboxKey("pending_retry_state")
+        val retryState = pendingRetryState()
+        ids.forEach(retryState::remove)
+        check(prefs.edit().putStringSet(pendingKey, pending).putString(retryKey, retryState.toString()).commit()) {
+            "Не удалось очистить состояние обработки Gmail ID"
+        }
     }
 
     fun mcLabelId(): String = prefs.getString(mailboxKey("mc_label_id"), "").orEmpty()
