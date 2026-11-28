@@ -130,10 +130,18 @@ class McRepository(context: Context) {
     fun chatMetadataFontSizeSp(): Int =
         ChatAppearanceSettingsPolicy.normalizeFontSizeSp(prefs.getInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_FONT_SIZE_SP))
 
-    fun saveChatAppearanceSettings(alphaPercent: Int, fontSizeSp: Int) {
+    fun chatCardAlphaPercent(): Int =
+        ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(prefs.getInt("chat_card_alpha_percent", ChatAppearanceSettingsPolicy.DEFAULT_CARD_ALPHA_PERCENT))
+
+    fun chatMessageFontSizeSp(): Int =
+        ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(prefs.getInt("chat_message_font_size_sp", ChatAppearanceSettingsPolicy.DEFAULT_MESSAGE_FONT_SIZE_SP))
+
+    fun saveChatAppearanceSettings(alphaPercent: Int, metadataFontSizeSp: Int, cardAlphaPercent: Int, messageFontSizeSp: Int) {
         prefs.edit()
             .putInt("chat_metadata_alpha_percent", ChatAppearanceSettingsPolicy.normalizeAlphaPercent(alphaPercent))
-            .putInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.normalizeFontSizeSp(fontSizeSp))
+            .putInt("chat_metadata_font_size_sp", ChatAppearanceSettingsPolicy.normalizeFontSizeSp(metadataFontSizeSp))
+            .putInt("chat_card_alpha_percent", ChatAppearanceSettingsPolicy.normalizeCardAlphaPercent(cardAlphaPercent))
+            .putInt("chat_message_font_size_sp", ChatAppearanceSettingsPolicy.normalizeMessageFontSizeSp(messageFontSizeSp))
             .apply()
     }
 
