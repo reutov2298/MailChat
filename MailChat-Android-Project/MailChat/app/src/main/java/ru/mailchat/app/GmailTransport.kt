@@ -157,15 +157,29 @@ class GmailTransport {
 
     fun list(token: String, query: String, max: Int = 50, excludeIds: Set<String> = emptySet()): List<RemoteMessage> {
         val q = URLEncoder.encode(query, "UTF-8")
-        val root = JSONObject(request(GmailConfig.GMAIL_API + "/messages?maxResults=" + max + "&includeSpamTrash=true&q=" + q, token))
-        val ids = root.optJSONArray("messages") ?: return emptyList()
-        if (ids.length() == 0) return emptyList()
-        val messageIds = (0 until ids.length())
-            .mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
-            .distinct()
-            .filterNot(excludeIds::contains)
-        onDiagnostic?.invoke("Gmail list: кандидатов=" + ids.length() + ", уже обработанных исключено=" + (ids.length() - messageIds.size))
-        return getMessages(token, messageIds)
+        var pageToken: String? = null
+        val result = mutableListOf<RemoteMessage>()
+        var candidateCount = 0
+        var skippedCount = 0
+        do {
+            val url = buildString {
+                append(GmailConfig.GMAIL_API).append("/messages?maxResults=").append(max.coerceIn(1, 100))
+                append("&includeSpamTrash=true&q=").append(q)
+                if (!pageToken.isNullOrBlank()) append("&pageToken=").append(URLEncoder.encode(pageToken, "UTF-8"))
+            }
+            val root = JSONObject(request(url, token))
+            val ids = root.optJSONArray("messages")
+            val messageIds = if (ids == null) emptyList() else (0 until ids.length())
+                .mapNotNull { ids.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
+                .distinct()
+                .filterNot(excludeIds::contains)
+            candidateCount += ids?.length() ?: 0
+            skippedCount += (ids?.length() ?: 0) - messageIds.size
+            result.addAll(getMessages(token, messageIds))
+            pageToken = root.optString("nextPageToken").takeIf { it.isNotBlank() }
+        } while (pageToken != null)
+        onDiagnostic?.invoke("Gmail list: кандидатов=" + candidateCount + ", уже обработанных исключено=" + skippedCount + ", загружено=" + result.size)
+        return result
     }
 
     /** Returns only message IDs added after the durable Gmail history cursor. */
