@@ -34,7 +34,7 @@ class GmailTransport {
     data class OwnProfile(val name: String?, val photoUrl: String?)
     data class HistoryChanges(val historyId: String, val messageIds: List<String>)
     data class SendResult(val id: String, val threadId: String?, val rfcMessageId: String)
-    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "")
+    data class RemoteMessage(val id: String, val threadId: String?, val from: String, val to: String, val subject: String, val body: String, val internalDate: Long, val spam: Boolean, val headers: Map<String, String>, val senderName: String = "", val mimeTypes: List<String> = emptyList())
 
     private fun request(url: String, token: String, method: String = "GET", body: String? = null, contentType: String = "application/json; charset=utf-8"): String {
         var lastError: GmailApiException? = null
@@ -260,6 +260,14 @@ class GmailTransport {
                         if (jsonStart < 0 || jsonEnd < jsonStart) return@forEach
                         val j = JSONObject(part.substring(jsonStart, jsonEnd + 1))
                         val payload = j.optJSONObject("payload")
+                        val mimeTypes = mutableListOf<String>()
+                        fun collectMimeTypes(part: JSONObject?) {
+                            if (part == null) return
+                            part.optString("mimeType").takeIf { it.isNotBlank() }?.let(mimeTypes::add)
+                            val nested = part.optJSONArray("parts") ?: return
+                            for (partIndex in 0 until nested.length()) collectMimeTypes(nested.optJSONObject(partIndex))
+                        }
+                        collectMimeTypes(payload)
                         val headers = payload?.optJSONArray("headers")
                         var from = ""; var to = ""; var subject = ""
                         val headerMap = linkedMapOf<String, String>()
@@ -271,7 +279,7 @@ class GmailTransport {
                         val labels = j.optJSONArray("labelIds")
                         val spam = (0 until (labels?.length() ?: 0)).any { labels!!.optString(it) == "SPAM" }
                         batchResult += RemoteMessage(j.optString("id"), j.optString("threadId"), from, to, subject,
-                            extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap, parseSenderDisplayName(from))
+                            extractBody(payload), j.optString("internalDate").toLongOrNull() ?: 0L, spam, headerMap, parseSenderDisplayName(from), mimeTypes)
                     }
                     if (batchResult.size + missingInGmail != batchIds.size) {
                         throw IllegalStateException("Gmail batch вернул неполный набор сообщений")
