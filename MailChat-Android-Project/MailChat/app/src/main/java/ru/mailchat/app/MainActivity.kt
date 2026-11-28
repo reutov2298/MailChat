@@ -477,9 +477,20 @@ class MainActivity : ComponentActivity() {
 
                     if (parsed == null) {
                         if (McProtocol.isMcCandidate(mail)) {
-                            val retryDelayMs = repo.schedulePendingHistoryRetry(mail.id)
-                            logger.error("Сообщение MC временно не обработано; History cursor не будет продвинут. Gmail ID: ${mail.id}. Причина: ${verification.reason}; MIME=${mail.mimeTypes.joinToString(",")}; headers=${mail.headers.size}; bodyBytes=${mail.body.toByteArray(Charsets.UTF_8).size}; повтор через ${retryDelayMs / 1000} сек.")
-                            throw IllegalStateException("Не удалось обработать сообщение MC Gmail ID ${mail.id}: ${verification.reason}; повтор через ${retryDelayMs / 1000} сек.")
+                            val reason = verification.reason ?: "Сообщение MC не прошло проверку"
+                            val diagnostic = buildList {
+                                add("Gmail ID: ${mail.id}")
+                                add("MIME: ${mail.mimeTypes.joinToString(",")}")
+                                add("Количество заголовков: ${mail.headers.size}")
+                                add("Размер тела письма: ${mail.body.toByteArray(Charsets.UTF_8).size} байт")
+                                addAll(verification.diagnostics)
+                            }.joinToString("\n")
+                            repo.recordRejectedIncoming(
+                                McProtocol.senderAddress(mail), mail.id, verification.errorCode, reason, diagnostic
+                            )
+                            logger.error("Сообщение MC отклонено и помещено в карантин. Gmail ID: ${mail.id}; код: ${verification.errorCode}; причина: $reason")
+                            skipped++
+                            continue
                         }
                         // A normal non-MC email is a terminal skip, not a failed MC event.
                         repo.markProcessed(mail.id)
@@ -1211,11 +1222,11 @@ class MainActivity : ComponentActivity() {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (message.incoming) Arrangement.Start else Arrangement.End) {
                         Surface(
                             modifier = Modifier
-                                .then(if (message.deleted) Modifier.fillMaxWidth(0.72f) else Modifier.widthIn(max = 320.dp))
+                                .then(if (message.deleted || message.isProcessingError) Modifier.fillMaxWidth(0.88f) else Modifier.widthIn(max = 320.dp))
                                 .onGloballyPositioned { messageCoordinates = it }
                                 .pointerInput(message.id, message.deleted, message.incoming) {
                                     detectTapGestures(onLongPress = { localPoint ->
-                                        val canOpen = !message.deleted && (message.incoming ||
+                                        val canOpen = !message.deleted && !message.isProcessingError && (message.incoming ||
                                             message.state in setOf(DeliveryState.SENT_TO_GMAIL, DeliveryState.DELIVERED))
                                         if (canOpen) {
                                             actionMenuPosition = messageCoordinates?.localToWindow(localPoint)?.round() ?: IntOffset.Zero
@@ -1224,14 +1235,31 @@ class MainActivity : ComponentActivity() {
                                     })
                                 }
                                 .graphicsLayer(alpha = if (message.deleted) 0.75f else 1f),
-                            color = if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
+                            color = if (message.isProcessingError) Color(0xFF3B3024) else if (message.deleted) Color(0xFF293440) else if (message.incoming) Color(0xFF24384A) else Color(0xFF145B49),
                             shape = RoundedCornerShape(
                                 topStart = 18.dp, topEnd = 18.dp,
                                 bottomStart = if (message.incoming) 5.dp else 18.dp,
                                 bottomEnd = if (message.incoming) 18.dp else 5.dp
                             )
                         ) {
-                            if (message.deleted) {
+                            if (message.isProcessingError) {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 10.dp)) {
+                                    Text("⚠ Не удалось обработать сообщение", color = Color(0xFFFFC56B), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    Spacer(Modifier.height(5.dp))
+                                    Text(message.errorReason.ifBlank { message.text }, color = Color.White, fontSize = 13.sp, lineHeight = 18.sp)
+                                    Spacer(Modifier.height(5.dp))
+                                    Text("Код: ${message.errorCode}", color = Color(0xFFD8C5A8), fontSize = 11.sp)
+                                    Text("Gmail ID: ${message.gmailId}", color = Color(0xFFD8C5A8), fontSize = 10.sp)
+                                    TextButton(
+                                        onClick = { clipboardManager.setText(AnnotatedString(message.supportDiagnosticText())) },
+                                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp)
+                                    ) {
+                                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Скопировать для техподдержки", fontSize = 12.sp)
+                                    }
+                                }
+                            } else if (message.deleted) {
                                 Text(
                                     "delete messages",
                                     modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
