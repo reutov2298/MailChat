@@ -379,6 +379,8 @@ class MainActivity : ComponentActivity() {
                 logger.add("Получение изменений Gmail через History API")
                 val incoming = gmailRequest { fresh ->
                     withContext(Dispatchers.IO) {
+                        val completedPending = repo.pendingHistoryIds().filter(repo::isProcessed)
+                        repo.removePendingHistoryIds(completedPending)
                         val cursor = repo.historyId()
                         if (cursor.isNotBlank()) {
                             try {
