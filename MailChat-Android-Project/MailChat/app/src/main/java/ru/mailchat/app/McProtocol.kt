@@ -79,6 +79,12 @@ object McProtocol {
         "x-mc-signature-algorithm", "x-mc-signature"
     )
 
+    fun isMcCandidate(mail: GmailTransport.RemoteMessage): Boolean =
+        mail.subject.equals("[MC] Message", ignoreCase = true) ||
+            mail.headers.keys.any { it.startsWith("x-mc-", ignoreCase = true) } ||
+            mail.body.contains("-----BEGIN MC DATA-----") ||
+            mail.body.contains("X-MC-Message-ID:", ignoreCase = true)
+
     fun verify(mail: GmailTransport.RemoteMessage, ownEmail: String): Parsed? {
         return verifyDetailed(mail, ownEmail).parsed
     }
@@ -272,7 +278,16 @@ object McProtocol {
             if (messageType != "text" && messageVersion < 2L) return Verification(null, "Некорректная версия изменения сообщения")
             return Verification(Parsed(messageId, chatId, sender, recipient, text, timestamp, sequence, messageVersion, messageType, senderName, senderAvatar), null, diagnostics)
         } catch (e: Exception) {
-            return Verification(null, "Ошибка проверки: ${e.javaClass.simpleName}")
+            val stack = e.stackTrace.take(12).joinToString(" <- ") {
+                "${it.className}.${it.methodName}:${it.lineNumber}"
+            }
+            val detail = e.message.orEmpty().replace(Regex("[\\r\\n]+"), " ").take(160)
+            val diagnostic = "MC_VERIFY_EXCEPTION type=${e.javaClass.simpleName} detail=$detail stack=$stack"
+            return Verification(
+                null,
+                "Ошибка проверки: ${e.javaClass.simpleName}" + if (detail.isBlank()) "" else ": $detail",
+                listOf(diagnostic)
+            )
         }
     }
 
