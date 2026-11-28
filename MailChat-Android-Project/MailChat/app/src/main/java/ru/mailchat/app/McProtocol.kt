@@ -223,14 +223,15 @@ object McProtocol {
                 return Verification(null, "Получатель не совпадает с аккаунтом MC")
             }
 
+            // MIME folding is transport-only whitespace. Use the unfolded encoded
+            // value both for key decoding and for the canonical public-key field.
+            val normalizedPublicKey = normalizeBase64Transport(
+                values.getValue("x-mc-public-key"), "x-mc-public-key", false
+            )
             val publicKey = KeyFactory.getInstance(
                 "Ed25519", McCrypto.provider
             ).generatePublic(
-                X509EncodedKeySpec(
-                    Base64.getDecoder().decode(
-                        normalizeBase64Transport(values.getValue("x-mc-public-key"), "x-mc-public-key", false)
-                    )
-                )
+                X509EncodedKeySpec(Base64.getDecoder().decode(normalizedPublicKey))
             )
 
             // New messages always put user text first. If the optional block exists, strip it;
@@ -293,7 +294,7 @@ object McProtocol {
                 messageId, chatId, values.getValue("x-mc-sender-id"), sender, recipient,
                 values.getValue("x-mc-version"), messageType,
                 timestamp.toString(), values.getValue("x-mc-sequence"),
-                values.getValue("x-mc-key-id"), values.getValue("x-mc-public-key"), text,
+                values.getValue("x-mc-key-id"), normalizedPublicKey, text,
                 values["x-mc-message-version"] ?: "1", protocol in setOf("2", "3"), protocol,
                 senderName, senderAvatar
             )
